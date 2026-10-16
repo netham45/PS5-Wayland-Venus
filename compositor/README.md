@@ -41,6 +41,9 @@ the headless compositor for three seconds and connects the in-tree
 globals and fails unless `wl_shm`, `xdg_wm_base` and `wl_compositor` are present;
 then it requests graceful SIGTERM shutdown. Neither `wayland-info` nor any system
 Wayland client is needed.
+The PNG readback encoder has a separate host regression test:
+`env/run meson test -C build/host/compositor capture-png --print-errorlogs`.
+
 
 ```sh
 make deps-ps5

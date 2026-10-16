@@ -52,6 +52,11 @@ with (BUILD / "stderr.log").open("w+") as stderr:
             live = [line(reader), line(reader)]
             assert [text for _, text in live] == ["live-one", "live-two"]
             print(f"client {index + 1}: " + " | ".join(raw for raw, _ in live))
+        server.stdin.write("emergency\n")
+        server.stdin.flush()
+        for reader in readers:
+            assert reader.readline() == b"fatal-signal-test\n"
+        print("signal handler: emergency bytes reached both nonblocking sockets")
         # A disconnected peer must not deliver SIGPIPE or block another client.
         readers.pop(0).close()
         clients.pop(0).close()
@@ -71,8 +76,10 @@ with (BUILD / "stderr.log").open("w+") as stderr:
         assert server.wait(timeout=3) == 0
         stderr.seek(0)
         mirrored = stderr.readlines()
-        assert len(mirrored) == 303, len(mirrored)
-        assert all(re.fullmatch(r"\[[0-9]+ ms\] host-test: .*\n", item) for item in mirrored)
+        assert len(mirrored) == 304, len(mirrored)
+        assert mirrored.count("fatal-signal-test\n") == 1
+        assert all(re.fullmatch(r"\[[0-9]+ ms\] host-test: .*\n", item)
+                   for item in mirrored if item != "fatal-signal-test\n")
         print("PASS: ring wrap, two clients, backlog/live ordering, disconnect/reconnect, stderr mirror, flush linger, EOF")
     finally:
         for reader in readers:

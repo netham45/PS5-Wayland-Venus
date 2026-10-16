@@ -286,8 +286,14 @@ static void server_new_keyboard(struct tinywl_server *server,
 	struct tinywl_keyboard *keyboard = calloc(1, sizeof(*keyboard));
 	keyboard->server = server;
 	keyboard->wlr_keyboard = wlr_keyboard;
+#ifdef PS5WL_PS5
+	ps5log("keyboard %s creating XKB context", device->name);
+#endif
 
 	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+#ifdef PS5WL_PS5
+	ps5log("keyboard XKB context=%p; compiling embedded keymap", (void *)context);
+#endif
 #ifdef PS5WL_PS5
 	struct xkb_keymap *keymap = xkb_keymap_new_from_string(context, ps5wl_keymap,
 		XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
@@ -295,6 +301,9 @@ static void server_new_keyboard(struct tinywl_server *server,
 	struct xkb_keymap *keymap = wlr_keyboard->keymap ?
 		xkb_keymap_ref(wlr_keyboard->keymap) :
 		xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+#endif
+#ifdef PS5WL_PS5
+	ps5log("keyboard embedded keymap=%p; assigning wlroots keymap", (void *)keymap);
 #endif
 	if (!keymap || !wlr_keyboard_set_keymap(wlr_keyboard, keymap)) {
 		wlr_log(WLR_ERROR, "Failed to initialize keyboard keymap");
@@ -673,6 +682,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 
 	/* Atomically applies the new output state. */
 	wlr_output_commit_state(wlr_output, &state);
+#ifdef PS5WL_PS5
+	ps5log("initial output commit returned");
+#endif
 	wlr_output_state_finish(&state);
 
 	/* Allocates and configures our state for this output */
@@ -703,9 +715,15 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	 * display, which Wayland clients can see to find out information about the
 	 * output (such as DPI, scale factor, manufacturer, etc).
 	 */
+#ifdef PS5WL_PS5
+	ps5log("creating output layout global and scene output");
+#endif
 	struct wlr_output_layout_output *l_output = wlr_output_layout_add_auto(server->output_layout,
 		wlr_output);
 	struct wlr_scene_output *scene_output = wlr_scene_output_create(server->scene, wlr_output);
+#ifdef PS5WL_PS5
+	ps5log("output layout=%p scene_output=%p", (void *)l_output, (void *)scene_output);
+#endif
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
@@ -1064,6 +1082,12 @@ static int compositor_main(int argc, char *argv[]) {
 	ps5log("Wayland display created");
 #endif
 	struct wl_event_loop *loop = wl_display_get_event_loop(server.wl_display);
+#ifdef PS5WL_PS5
+	if (ps5_safety_init(loop)) {
+		ps5log("fatal-handler/watchdog initialization failed errno=%d", errno);
+		return 1;
+	}
+#endif
 	struct wl_event_source *sigint = wl_event_loop_add_signal(loop, SIGINT,
 		terminate_display, server.wl_display);
 	struct wl_event_source *sigterm = wl_event_loop_add_signal(loop, SIGTERM,
@@ -1084,6 +1108,24 @@ static int compositor_main(int argc, char *argv[]) {
 #endif
 		return 1;
 	}
+#if defined(PS5WL_PS5) && PS5WL_VIDEOOUT_ONLY
+	if (!wlr_backend_start(server.backend)) {
+		wlr_backend_destroy(server.backend); return 1;
+	}
+	struct wl_event_source *stage_timeout = wl_event_loop_add_timer(loop,
+		terminate_validation, server.wl_display);
+	if (!stage_timeout || wl_event_source_timer_update(stage_timeout, PS5WL_TEST_SECONDS * 1000)) {
+		wlr_backend_destroy(server.backend); return 1;
+	}
+	ps5log("VIDEOOUT_ONLY running %ds; no clients, input or renderer", PS5WL_TEST_SECONDS);
+	wl_display_run(server.wl_display);
+	wlr_backend_destroy(server.backend);
+	wl_event_source_remove(stage_timeout);
+	wl_event_source_remove(sigint); wl_event_source_remove(sigterm);
+	wl_display_destroy(server.wl_display);
+	ps5log("VIDEOOUT_ONLY clean teardown"); ps5log_flush_wait(1000);
+	return 0;
+#endif
 
 	/* Autocreates a renderer, either Pixman, GLES2 or Vulkan for us. The user
 	 * can also specify a renderer using the WLR_RENDERER env var.

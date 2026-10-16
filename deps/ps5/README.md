@@ -119,3 +119,22 @@ a Wayland display, dispatches its event loop with timeout zero, destroys it,
 and logs the actual result through `common/ps5log` on TCP port 9531. It waits ten
 seconds for a pull client. Deployment and console output are separate evidence;
 a successful link alone does not prove console behavior.
+
+### Observed console acceptance
+
+After the unsupported atomic-dup fallback patch, a freshly uploaded linktest
+on `192.168.3.211` completed through Payload Manager and TCP port 9531:
+
+```text
+deps-linktest: wlr_log_init: OK
+deps-linktest: getenv: OK (unset)
+deps-linktest: wl_event_loop_create: OK
+deps-linktest: wl_display_create: OK
+deps-linktest: wl_event_loop_dispatch(timeout=0): 0 errno=0
+deps-linktest: RESULT: PASS
+```
+
+The host upload/launch/log command exited zero. Separate console probes also
+passed epoll/eventfd, timerfd, signalfd and temporary-mask `epoll_pwait`, including
+restoration of the original blocked signal mask. These observations establish
+the dependency/linktest path, not compositor rendering or unsupported GPU APIs.

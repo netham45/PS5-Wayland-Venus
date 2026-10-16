@@ -15,10 +15,14 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdatomic.h>
 
 #define RING_LINES 256
 #define LINE_BYTES 1024
 #define MAX_CLIENTS 16
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "fatal logger requires lock-free fd slots");
+static _Atomic int emergency_fds[MAX_CLIENTS]; /* descriptor+1; zero is empty */
+static struct client *active_clients;
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char ring[RING_LINES][LINE_BYTES];
@@ -56,6 +60,7 @@ static int suppress_sigpipe(int fd) {
 }
 
 static void disconnect_client(struct client *client) {
+    atomic_store_explicit(&emergency_fds[client - active_clients], 0, memory_order_relaxed);
     close(client->fd);
     client->fd = -1;
 }
@@ -63,6 +68,7 @@ static void disconnect_client(struct client *client) {
 static void *serve(void *unused) {
     (void)unused;
     struct client clients[MAX_CLIENTS];
+    active_clients = clients;
     for (size_t i = 0; i < MAX_CLIENTS; ++i)
         clients[i].fd = -1;
     for (;;) {
@@ -88,6 +94,7 @@ static void *serve(void *unused) {
                 clients[i].next = next_line > RING_LINES ? next_line - RING_LINES : 0;
                 clients[i].offset = 0;
                 clients[i].fd = fd;
+                atomic_store_explicit(&emergency_fds[i], fd + 1, memory_order_relaxed);
                 pthread_mutex_unlock(&lock);
             }
         }
@@ -235,4 +242,17 @@ void ps5log_flush_wait(int ms) {
         return;
     struct timespec delay = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
     while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
+}
+
+void ps5log_emergency_write(const char *message, size_t length) {
+    (void)write(STDERR_FILENO, message, length);
+    for (size_t i = 0; i < MAX_CLIENTS; ++i) {
+        int fd = atomic_load_explicit(&emergency_fds[i], memory_order_relaxed) - 1;
+        if (fd < 0) continue;
+        int flags = MSG_DONTWAIT;
+#ifdef MSG_NOSIGNAL
+        flags |= MSG_NOSIGNAL;
+#endif
+        (void)send(fd, message, length, flags);
+    }
 }

@@ -5,6 +5,7 @@
 #include "ps5log.h"
 #include <drm_fourcc.h>
 #include <sys/event.h>
+#include "tiling.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -21,8 +22,10 @@
 #define HEIGHT 1080
 /* SDL Tilemap_BufferSize: last 128-row band + final 512x128 tile.
  * Round each real 1080p scanout to 2 MiB; no unused 64 MiB allocation. */
-#define BUFFER_BYTES (((((HEIGHT - 1) / 128) * (128 * WIDTH) + ((WIDTH - 1) / 512) * 65536 + 65536) * 4 + 0x1fffff) & ~0x1fffff)
+#define BUFFER_BYTES ((PS5_TILE_EXTENT(WIDTH, HEIGHT) + 0x1fffff) & ~0x1fffff)
 #define MEMORY_SIZE (2 * BUFFER_BYTES)
+_Static_assert(PS5_TILE_EXTENT(WIDTH, HEIGHT) == 8912896, "SDL exact 1080p tile extent");
+_Static_assert(BUFFER_BYTES == 10485760, "scanout rounded to 2 MiB boundary");
 struct ps5_backend {
  struct wlr_backend base;
  struct wlr_output output;
@@ -45,14 +48,6 @@ struct ps5_backend {
  pixman_region32_t stale[2];
  uint32_t xoff[WIDTH], yoff[128];
 };
-static uint32_t tile_offset(uint32_t x, uint32_t y) {
- return ((x & 1) | ((x >> 1 & 1) << 1) | ((y & 1) << 2) |
- ((y >> 1 & 1) << 3) | ((y >> 2 & 1) << 4) | ((x >> 2 & 1) << 5) |
- (((x >> 3 ^ y >> 3) & 1) << 6) | (((x >> 4 ^ y >> 4) & 1) << 7) |
- (((x >> 6 ^ y >> 5) & 1) << 8) | (((x >> 5 ^ y >> 6) & 1) << 9) |
- ((y >> 3 & 1) << 10) | ((x >> 4 & 1) << 11) | ((y >> 6 & 1) << 12) |
- ((x >> 6 & 1) << 13) | ((x >> 7 & 1) << 14) | ((x >> 8 & 1) << 15));
-}
 static struct ps5_backend *from_output(struct wlr_output *output) {
  struct ps5_backend *b = wl_container_of(output, b, output); return b;
 }
@@ -126,6 +121,8 @@ static const struct wlr_output_impl output_impl = {
 struct flip_message { struct timespec when; int error; };
 static void *flip_thread(void *data) {
  struct ps5_backend *b = data;
+ if (ps5_safety_thread_stack(1)) { ps5log("flip thread sigaltstack failed errno=%d", errno); return NULL; }
+ ps5log("flip waiter thread started kevent_bytes=%zu", sizeof(struct kevent));
  while (!atomic_load(&b->stopping)) {
   struct kevent event; int count = 0; unsigned timeout = 100000;
   int rc = sceKernelWaitEqueue(b->queue, &event, 1, &count, &timeout);
@@ -182,9 +179,24 @@ static bool backend_start(struct wlr_backend *base) {
  struct ps5_backend *b = wl_container_of(base, b, base);
  if (pthread_create(&b->thread, NULL, flip_thread, b)) return false;
  b->thread_started = true;
+#if PS5WL_VIDEOOUT_ONLY
+ b->output.enabled = true;
+ for (unsigned y = 0; y < HEIGHT; ++y) for (unsigned x = 0; x < WIDTH; ++x) {
+  unsigned index = (y / 128) * (128 * WIDTH) + (b->xoff[x] ^ b->yoff[y % 128]);
+  ((uint32_t *)b->buffers[0].data)[index] = 0xff204060u;
+  ((uint32_t *)b->buffers[1].data)[index] = 0xff604020u;
+ }
+ __asm__ volatile("sfence" ::: "memory");
+ int rc = sceVideoOutSubmitFlip(b->video, 0, 1, 1);
+ ps5log("VIDEOOUT_ONLY first SubmitFlip rc=%#x", rc);
+ if (rc) return false;
+ b->pending = true; b->pending_index = 0; b->next = 1;
+#else
  wl_signal_emit_mutable(&base->events.new_output, &b->output);
+ ps5log("output enumeration returned; starting input enumeration");
  ps5_input_start(b->input);
  wl_event_loop_add_idle(b->loop, first_frame, b);
+#endif
  return true;
 }
 static void backend_destroy(struct wlr_backend *base) {
@@ -196,8 +208,9 @@ static void backend_destroy(struct wlr_backend *base) {
  ps5_input_destroy(b->input);
  wlr_output_finish(&b->output);
  wlr_backend_finish(base);
- if (b->queue) { sceVideoOutDeleteFlipEvent(b->queue, b->video); sceKernelDeleteEqueue(b->queue); }
- if (b->video >= 0) sceVideoOutClose(b->video);
+ if (b->queue) ps5log("DeleteFlipEvent rc=%#x", sceVideoOutDeleteFlipEvent(b->queue, b->video));
+ if (b->video >= 0) { ps5log("closing VideoOut handle=%#x", b->video); ps5_safety_close(); ps5log("VideoOut closed"); }
+ if (b->queue) ps5log("DeleteEqueue rc=%#x", sceKernelDeleteEqueue(b->queue));
  if (b->mapping) sceKernelMunmap(b->mapping, MEMORY_SIZE);
  if (b->allocated) sceKernelReleaseDirectMemory(b->physical, MEMORY_SIZE);
  for (int i = 0; i < 2; ++i) {
@@ -237,6 +250,7 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
  b->video = sceVideoOutOpen(0xff, 0, 0, NULL);
  ps5log("VideoOut SYSTEM open=%#x", b->video);
  if (b->video < 0) goto fail;
+ ps5_safety_video(b->video);
  int64_t pool = sceKernelGetDirectMemorySize(), available_start = -1;
  size_t available = 0;
  int rc = sceKernelAvailableDirectMemorySize(0, pool, 0x200000, &available_start, &available);
@@ -273,10 +287,12 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
   fcntl(b->pipefd[1], F_SETFD, FD_CLOEXEC)) goto fail;
  b->flip_source = wl_event_loop_add_fd(b->loop, b->pipefd[0], WL_EVENT_READABLE, flip_ready, b);
  if (!b->flip_source) goto fail;
+#if !PS5WL_VIDEOOUT_ONLY
  b->input = ps5_input_create(&b->base, display);
  if (!b->input) goto fail;
  b->capture = ps5_capture_create(b->loop, WIDTH, HEIGHT, scanout_pixel, b);
  if (!b->capture) ps5log("scanout debug capture unavailable errno=%d", errno);
+#endif
  return &b->base;
 fail:
  backend_destroy(&b->base); return NULL;

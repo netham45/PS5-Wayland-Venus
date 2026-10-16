@@ -13,8 +13,10 @@ includes = []
 if meson.is_cross_build()
   add_project_arguments('-DPS5WL_PS5', '-D__BSD_VISIBLE=1', language: 'c')
   add_project_arguments('-DPS5WL_TEST_SECONDS=' + get_option('console_test_seconds').to_string(), language: 'c')
+  add_project_arguments('-DPS5WL_VIDEOOUT_ONLY=' + (get_option('videoout_only') ? '1' : '0'), language: 'c')
   sources += ['src/backend/ps5/backend.c', 'src/backend/ps5/input.c',
-    'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c', '../common/ps5log/ps5log.c']
+    'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c',
+    'src/backend/ps5/safety.c', '../common/ps5log/ps5log.c']
   includes += include_directories('../common/ps5log')
   cc = meson.get_compiler('c')
   foreach lib : ['SceVideoOut', 'SceSystemService', 'SceUserService', 'SceKeyboard', 'ScePad', 'SceSysmodule']
@@ -27,4 +29,10 @@ executable('ps5wl', sources, include_directories: includes,
 if not meson.is_cross_build()
   executable('registry-dump', 'tests/registry-dump.c',
     dependencies: dependency('wayland-client', version: '>=1.24.0'))
+  capture_test = executable('capture-test',
+    ['tests/capture.c', 'src/backend/ps5/capture.c', '../common/ps5log/ps5log.c'],
+    include_directories: include_directories('src/backend/ps5', '../common/ps5log'),
+    dependencies: [wlroots, wayland_server, dependency('threads')])
+  test('capture-png', find_program('python3'),
+    args: [files('tests/capture.py'), capture_test], timeout: 15)
 endif

@@ -3,8 +3,14 @@
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 MODE=${1:-compositor}
-if [[ $# -gt 1 || ( "$MODE" != compositor && "$MODE" != --probe ) ]]; then
-    echo "Usage: $0 [compositor|--probe]" >&2
+if [[ "$MODE" == --elf && $# -eq 2 ]]; then
+    PAYLOAD=$(realpath -- "$2")
+    if [[ ! -f "$PAYLOAD" ]]; then
+        echo "Missing payload: $PAYLOAD" >&2
+        exit 1
+    fi
+elif [[ $# -gt 1 || ( "$MODE" != compositor && "$MODE" != --probe ) ]]; then
+    echo "Usage: $0 [compositor|--probe|--elf BOUNDED_COMPOSITOR_ELF]" >&2
     exit 2
 fi
 processes=$("$ROOT/tools/ps5ctl" ps)
@@ -18,6 +24,9 @@ esac
 if [[ "$MODE" == --probe ]]; then
     "$ROOT/env/run" make -C "$ROOT/launcher" all
     LOG_PORT=9582
+elif [[ "$MODE" == --elf ]]; then
+    "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD="$PAYLOAD"
+    LOG_PORT=9530
 else
     "$ROOT/env/run" env PS5WL_TEST_SECONDS=60 "$ROOT/compositor/build.sh" ps5
     "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD="$ROOT/build/ps5/compositor/ps5wl"

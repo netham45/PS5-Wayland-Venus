@@ -68,4 +68,8 @@ struct ps5_capture *ps5_capture_create(struct wl_event_loop *, unsigned, unsigne
  uint32_t (*)(void *, unsigned, unsigned), void *);
 void ps5_capture_destroy(struct ps5_capture *);
 void ps5_autostart(void);
+int ps5_safety_init(struct wl_event_loop *);
+int ps5_safety_thread_stack(unsigned);
+void ps5_safety_video(int);
+void ps5_safety_close(void);
 #endif

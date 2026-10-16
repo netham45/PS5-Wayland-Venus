@@ -2,7 +2,7 @@ REPO := $(abspath ..)
 PS5_PAYLOAD_SDK ?= $(REPO)/.sdk
 PAYLOAD ?= ps5wl-launch-probe.elf
 .PHONY: all clean FORCE
-all: ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-test.elf
+all: ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-test.elf ps5wl-launch-state.elf
 ifeq ($(PS5WL_BUILD_ENV),1)
 CC := $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 CPPFLAGS += -I$(REPO)/common/ps5log -Ivendor
@@ -16,6 +16,8 @@ payload.elf: $(PAYLOAD) FORCE
 	cp $(PAYLOAD) $@
 ps5wl-launch-test.elf: trigger.c $(REPO)/common/ps5log/ps5log.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+ps5wl-launch-state.elf: state.c $(REPO)/common/ps5log/ps5log.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
 icon0.png: icon.py
 	python3 $< $@
 ps5wl-install.elf: $(SOURCES) hbldr.h fs.h payload.elf icon0.png Makefile
@@ -27,4 +29,4 @@ ps5wl-install.elf ps5wl-uninstall.elf:
 	$(REPO)/env/run $(MAKE) -C $(CURDIR) all PAYLOAD=$(PAYLOAD)
 endif
 clean:
-	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf payload.elf icon0.png
+	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf ps5wl-launch-state.elf payload.elf icon0.png
