@@ -45,6 +45,24 @@ a separate human-interaction check. PID 132 completed 3541 flips and closed
 VideoOut, deleted its equeue, unmapped and released direct memory; release
 results were zero and its process disappeared after native app exit.
 
+Final normal interactive installation was also exercised after console recovery:
+installer PID 85 registered `PSWL00001` with result zero and installed the
+no-timeout compositor plus a separate demo and demo-only autostart manifest.
+The same HTTP handler used by the icon launched foreground compositor 87;
+the compositor automatically started demo 88, which reached 3509 frames.
+Logged client commits/compositions reached 3480 and VideoOut markers matched.
+`build/ps5/evidence/final-demo.png` is the actual 1920x1080 completed scanout,
+6,240,291 bytes, showing readable demo text/checkerboard and the software cursor.
+The title-checked shipping helper 89 returned zero from SuspendApp, owned
+SIGKILL and KillApp; the running BigApp became `0xffffffff`. The demo observed
+Broken pipe after that forced close and exited with `failed=1`; this was not a
+successful normal client exit. `final-processes.log` then showed only expected
+resident installer 85 among ps5wl processes: compositor, demo, trigger and close
+helper were absent. Files `final-{installer,compositor,demo,close}.log` under the
+same evidence directory record the sequence. The app is installed but not
+running; actual icon selection, HDMI visibility and physical input still need
+the final human check. No fork or Vulkan client was used in this final preflight.
+
 Vulkan tests must retain a foreground app context. On this console, otherwise
 identical wrapped offscreen tests saw zero direct-memory pool size without a
 BigApp, versus 12 GiB with compositor PID 142 active. In that live context,
@@ -81,9 +99,9 @@ observed launching. Console loss followed the fork, but the failing syscall and
 cause are unproven. All owned console actions/log pullers were stopped.
 The temporary launcher source/build target was restored and the normal probe
 rebuilt; resident installer 130 and its installed 60-second compositor were not
-modified by this experiment. Recovery must remove or replace the managed
-`ps5wl-launch-probe.elf` fork body and `ps5wl-launch-fork.elf` driver before
-either is launched again. Do not repeat this experiment automatically.
+modified by this experiment. After recovery, the coordinator removed both
+managed diagnostic uploads. The normal probe must be uploaded again before a
+normal lifecycle check. Do not repeat the fork experiment automatically.
 
 The exact SDL tile extent is 8,912,896 bytes. The native `tiling-bounds` test
 enumerates all 2,073,600 scanout pixels, proves unique addresses, and measures

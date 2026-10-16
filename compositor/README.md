@@ -64,7 +64,7 @@ The pinned evdev/pc105/us XKB keymap is compiled on the build host and embedded;
 no console XKB files or shell are required. New PS5 windows are maximized to
 1920x1080. Keyboard/mouse and DualSense poll at 250 Hz. Left stick/touchpad moves
 the pointer, Cross/R2 and Circle/L2 click, right stick scrolls, and Options
-cycles focus. Options+Share requests clean shutdown.
+cycles focus. Ctrl+Alt+Backspace or Options+Create (Share) requests clean shutdown.
 
 For unattended hardware validation, build with
 `PS5WL_TEST_SECONDS=60 make compositor-ps5` (accepted range 0–90, default 0).
@@ -81,12 +81,19 @@ use `tools/ps5ctl screenshot --port 9531 --output capture.png` to pull it.
 System UI overlays are not included in this readback.
 
 
+The home-screen launcher bundle installs the separate interactive demo at
+`/data/ps5wl/bin/ps5wl-demo.elf` and writes a demo-only autostart manifest.
+See `../launcher/README.md` for the final build/install command. Demo-only
+startup avoids focus ambiguity during the keyboard/mouse/controller check.
+
 `/data/ps5wl/autostart.txt`, when readable, contains one absolute client ELF path
 per line (`#` comments allowed). Only `ps5wl-*` payload paths are sent as
 `file://...?pipe=0` requests to the loopback elfldr on 9021. This does not change
-Payload Manager autoload/configuration. Upload clients through `tools/ps5ctl`
-and use its returned console paths in this list. Install and start the compositor
-itself through the foreground launcher, not a background payload upload.
+Payload Manager autoload/configuration. To add other clients manually, upload
+them through `tools/ps5ctl` and use its returned console paths in this list;
+reinstalling the launcher restores its bundled demo-only manifest. Install and
+start the compositor itself through the foreground launcher, not a background
+payload upload.
 
 Host builds also expose screencopy and virtual keyboard/pointer protocols for
 the pinned client integration tests. These injection protocols are not exposed

@@ -21,6 +21,7 @@ case "$processes" in
         exit 1
         ;;
 esac
+"$ROOT/env/run" "$ROOT/clients/build.sh" ps5
 if [[ "$MODE" == --probe ]]; then
     "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD=ps5wl-launch-probe.elf
     LOG_PORT=9582

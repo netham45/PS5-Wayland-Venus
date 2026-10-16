@@ -27,6 +27,8 @@
  extern const unsigned char name[], name##_end[]
 #ifndef UNINSTALL
 ASSET(payload, "payload.elf");
+ASSET(demo_payload, "demo.elf");
+static const char autostart[] = ROOT "/bin/ps5wl-demo.elf\n";
 ASSET(icon, "icon0.png");
 static const char param[] = "{\"titleId\":\"" TITLE "\",\"applicationCategoryType\":65536,"
  "\"deeplinkUri\":\"http://127.0.0.1:9581/launch\",\"localizedParameters\":{"
@@ -72,8 +74,12 @@ static int save(const char *path, const void *data, size_t size) {
 static int install(void) {
  if (directory(ROOT) || directory(ROOT "/bin") || directory(APP) || directory(APP "/sce_sys")) return -1;
  if (save(TARGET, payload, payload_end-payload) ||
+     save(ROOT "/bin/ps5wl-demo.elf", demo_payload, demo_payload_end-demo_payload) ||
+     save(ROOT "/autostart.txt", autostart, sizeof(autostart)-1) ||
      save(APP "/sce_sys/param.json", param, sizeof(param)-1) ||
      save(APP "/sce_sys/icon0.png", icon, icon_end-icon)) return -1;
+ ps5log("installed demo bytes=%zu autostart=%s", (size_t)(demo_payload_end-demo_payload),
+        ROOT "/bin/ps5wl-demo.elf");
  uint32_t handle;
  int (*install_dir)(const char *, const char *, void *) = NULL;
  if (!kernel_dynlib_handle(-1, "libSceAppInstUtil.sprx", &handle))
@@ -159,7 +165,9 @@ int main(void) {
  rc=sceAppInstUtilAppUnInstall(TITLE);
  ps5log("unregister title=%s rc=0x%x",TITLE,rc);
  {
-  const char *files[]={APP "/sce_sys/icon0.png", APP "/sce_sys/param.json", TARGET, TARGET ".new"};
+  const char *files[]={APP "/sce_sys/icon0.png", APP "/sce_sys/param.json", TARGET, TARGET ".new",
+   ROOT "/bin/ps5wl-demo.elf", ROOT "/bin/ps5wl-demo.elf.new",
+   ROOT "/autostart.txt", ROOT "/autostart.txt.new"};
   for(size_t i=0;i<sizeof(files)/sizeof(files[0]);i++) if(unlink(files[i]) && errno!=ENOENT) { ps5log("unlink %s errno=%d",files[i],errno); rc=-1; }
   const char *dirs[]={APP "/sce_sys",APP,ROOT "/bin",ROOT};
   for(size_t i=0;i<sizeof(dirs)/sizeof(dirs[0]);i++) {

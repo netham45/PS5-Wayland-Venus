@@ -38,6 +38,10 @@ Every claim about the console is either cited evidence or marked
   `0x80020023`, so `vkCreateSwapchainKHR` returns OUT_OF_DEVICE_MEMORY. GPU work
   must run in the foreground app process: plan = Venus clients over vtest to a
   GPU server inside the compositor (`gpu-server/`, under investigation).
+- **Never fork() inside the foreground app process:** a single raw fork in a
+  BigApp diagnostic (no VideoOut) crashed the console (2026-10-16): child never
+  logged, console found powered off, hard power cycle needed (the usual crash
+  symptom). Last lines: `build/ps5/evidence/bigapp-fork-budget.log`.
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.

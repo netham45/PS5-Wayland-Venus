@@ -1,10 +1,9 @@
 # PS5 Wayland home-screen launcher
 
-**Current console hold:** the coordinator reports the console unreachable after
-the isolated BigApp fork experiment below. Do not deploy, retry console calls,
-or run managed fork/probe uploads until the coordinator authorizes recovery.
-The installed compositor target and resident130 were not modified by that
-experiment; the managed diagnostic upload names require recovery cleanup.
+**Console recovery:** the coordinator restored a fresh boot and removed both
+unsafe managed uploads from the isolated fork experiment. That experiment must
+not be repeated automatically. Native compositor/demo installation uses no
+fork, GPU, or direct-memory-budget experiment.
 
 The installer registers a **PS5 Wayland** icon (`PSWL00001`), writes the bundled
 ELF to `/data/ps5wl/bin/ps5wl-compositor.elf`, and stays resident to handle its
@@ -14,6 +13,27 @@ with the compositor. It does not install an unsigned executable title or need
 kstuff. It refuses to terminate an existing BigApp; close a running game/app
 manually before launching Wayland.
 
+The bundle also installs the separate `ps5wl-demo.elf` client and an owned
+`/data/ps5wl/autostart.txt` which starts that demo on every compositor launch.
+The default is **demo only**, so the interactive window has unambiguous focus.
+It runs without a frame limit; normal SHM animation, typing, pointer trails and
+fullscreen controls are available without separately launching a client.
+Reinstalling replaces this manifest with the bundled demo-only configuration.
+
+The final no-timeout bundle was installed and automatically exercised on
+firmware 10.60: installer PID 85 registered the icon (`rc=0`), its normal
+loopback icon handler launched compositor 87, and the installed demo 88
+autostarted without another deployment. The demo reached 3509 frames; real
+1920x1080 scanout `build/ps5/evidence/final-demo.png` shows its title/text and
+checkerboard. `final-{installer,compositor,demo,close}.log` in that directory
+record the run. Shipping close helper 89 returned zero for SuspendApp,
+owned SIGKILL and KillApp; the BigApp became `0xffffffff`. The demo's Broken
+pipe/`failed=1` followed that forced close. `final-processes.log` confirmed
+that compositor, demo, trigger and helper were gone; only expected resident
+installer 85 remained. The installation is left **not running**, ready for
+the user's actual icon/TV/input check. Automated HTTP triggering does not
+prove that a human selected the icon or saw the HDMI output.
+
 ## Build and install
 
 Run from the repository root. All compilation uses the pinned container/SDK.
@@ -22,7 +42,8 @@ The default bundle is the real compositor built at `build/ps5/compositor/ps5wl`
 renders nothing and is selected explicitly with `launcher/test.sh --probe`.
 
 ```sh
-env/run compositor/build.sh ps5
+env/run env PS5WL_TEST_SECONDS=0 compositor/build.sh ps5
+env/run clients/build.sh ps5
 env/run make -C launcher all
 tools/ps5ctl run launcher/ps5wl-install.elf
 tools/ps5ctl logs --port 9580 --retry 30
@@ -75,9 +96,11 @@ tools/ps5ctl logs --port 9530 --retry 30
 ```
 
 An installer built with the compositor replaces the diagnostic ELF atomically;
-the installed destination and icon stay the same. This bundle installs the ELF,
-not external keyboard maps or client binaries; deploy runtime assets required
-by the compositor separately using their component's installation procedure.
+the installed destination and icon stay the same. The bundle embeds both the
+compositor and `build/ps5/clients/ps5wl-demo.elf` (override with `DEMO=/absolute/path`
+when building). It atomically writes the demo executable before its autostart
+manifest. Keyboard maps are embedded by the compositor; no external XKB data is
+needed. Other clients, including Vulkan clients, are not automatically started.
 
 The icon persists across reboot, but the resident installer does not. After a
 reboot, re-establish the jailbreak/elfldr/Payload Manager and run the installer
@@ -90,6 +113,8 @@ startup integration.
 
 - `/user/app/PSWL00001/sce_sys/{param.json,icon0.png}`: browser icon registration.
 - `/data/ps5wl/bin/ps5wl-compositor.elf`: bundled executable.
+- `/data/ps5wl/bin/ps5wl-demo.elf`: bundled, separate interactive SHM client.
+- `/data/ps5wl/autostart.txt`: installer-owned demo-only startup manifest.
 - `/system_ex/app/PSWL00002/{eboot.bin,sce_sys/param.json}`: unique signed BigApp
   launch container, created on first launch. `eboot.bin` is copied locally from
   `/system_ex/app/NPXS40106/eboot.bin`; no Sony binary is distributed here.
@@ -119,10 +144,11 @@ tools/ps5ctl logs --port 9580 --retry 30
 ```
 
 The uninstall payload unregisters `PSWL00001`, removes the icon files, bundled
-ELF and its `.new` staging file, and removes the unique BigApp launch container.
-It removes empty `/data/ps5wl/bin` and `/data/ps5wl` directories; unrelated files
-are retained and explicitly logged, not recursively deleted. Remove separately
-installed runtime assets using their owning component's uninstall procedure.
+compositor/demo executables, autostart manifest and their `.new` staging files,
+and removes the unique BigApp launch container. It removes empty
+`/data/ps5wl/bin` and `/data/ps5wl` directories; unrelated files are retained and
+explicitly logged, not recursively deleted. Remove separately installed runtime
+assets using their owning component's uninstall procedure.
 Check `uninstall complete rc=0`. After the uninstall payload exits (30-second
 log window), remove the Payload Manager uploads owned by this checkout:
 
@@ -416,10 +442,9 @@ running. The experiment owner restored the original `probe.c` and Makefile,
 removed its temporary local fork ELF, and reported a successful rebuild of the
 normal probe. Source ownership has returned to Launcher.
 
-Remote cleanup is **not proven** while the console is unreachable: managed
-`ps5wl-launch-probe.elf` still contains the temporary fork body, and managed
-`ps5wl-launch-fork.elf` is the temporary driver upload. Do not launch either
-managed copy after recovery until it has been restored or removed under the
-coordinator's direction. No attempt to clean these uploads or terminate195/196
-is permitted during the console hold.
+At the outage, managed `ps5wl-launch-probe.elf` still contained the temporary
+fork body and `ps5wl-launch-fork.elf` was its temporary driver. After recovery,
+the coordinator removed both managed uploads and confirmed a fresh boot with
+no ps5wl processes. Re-upload the rebuilt normal lifecycle probe before any
+future normal probe test. The fork experiment itself must not be repeated.
 
