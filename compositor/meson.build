@@ -7,8 +7,23 @@ wlroots = dependency('wlroots-0.20', version: '=0.20.2', static: static_deps)
 wayland_server = dependency('wayland-server', version: '>=1.24.0', static: static_deps)
 xkbcommon = dependency('xkbcommon', static: static_deps)
 
-executable('ps5wl', 'src/ps5wl.c',
-  dependencies: [wlroots, wayland_server, xkbcommon], install: true)
+sources = ['src/ps5wl.c']
+deps = [wlroots, wayland_server, xkbcommon]
+includes = []
+if meson.is_cross_build()
+  add_project_arguments('-DPS5WL_PS5', '-D__BSD_VISIBLE=1', language: 'c')
+  add_project_arguments('-DPS5WL_TEST_SECONDS=' + get_option('console_test_seconds').to_string(), language: 'c')
+  sources += ['src/backend/ps5/backend.c', 'src/backend/ps5/input.c',
+    'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c', '../common/ps5log/ps5log.c']
+  includes += include_directories('../common/ps5log')
+  cc = meson.get_compiler('c')
+  foreach lib : ['SceVideoOut', 'SceSystemService', 'SceUserService', 'SceKeyboard', 'ScePad', 'SceSysmodule']
+    deps += cc.find_library(lib)
+  endforeach
+  deps += dependency('threads')
+endif
+executable('ps5wl', sources, include_directories: includes,
+  dependencies: deps, install: true)
 if not meson.is_cross_build()
   executable('registry-dump', 'tests/registry-dump.c',
     dependencies: dependency('wayland-client', version: '>=1.24.0'))

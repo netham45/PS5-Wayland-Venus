@@ -1,0 +1,115 @@
+--- a/cube/cube.c
++++ b/cube/cube.c
+@@ -44,8 +44,13 @@
+ #include "xcb_loader.h"
+ #endif
+ #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+-#include <linux/input.h>
+-#include "wayland_loader.h"
++#include <linux/input-event-codes.h>
++#include <wayland-client.h>
++#include "xdg-shell-client-header.h"
++#include "xdg-decoration-client-header.h"
++#include "ps5wl-client.h"
++#include "ps5log.h"
++extern int ps5wl_vulkan_install(void);
+ #endif
+ 
+ #ifdef _WIN32
+@@ -429,7 +434,6 @@
+     xcb_intern_atom_reply_t *atom_wm_delete_window;
+ #endif
+ #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+-    void *wayland_library;  // Dynamic library for wayland
+     struct wl_display *wayland_display;
+     struct wl_registry *registry;
+     struct wl_compositor *compositor;
+@@ -3052,6 +3056,8 @@
+                 demo_draw(demo);
+                 if (!demo->is_minimized) {
+                     demo->curFrame++;
++                    if (demo->curFrame == 1 || demo->curFrame % 60 == 0)
++                        ps5log("vkcube presented frame=%d", demo->curFrame);
+                 }
+                 if (demo->frameCount != INT32_MAX && demo->curFrame == demo->frameCount) demo->quit = true;
+             }
+@@ -3742,12 +3748,7 @@
+ #endif
+ #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+ static const char *demo_init_wayland_connection(struct demo *demo) {
+-    demo->wayland_library = initialize_wayland();
+-    if (NULL == demo->wayland_library) {
+-        return "Cannot load wayland dynamic library.";
+-    }
+-
+-    demo->wayland_display = wl_display_connect(NULL);
++    demo->wayland_display = ps5wl_client_connect(15000);
+ 
+     if (demo->wayland_display == NULL) {
+         return "Cannot connect to wayland.";
+@@ -4700,7 +4701,11 @@
+ 
+     memset(demo, 0, sizeof(*demo));
+     demo->presentMode = VK_PRESENT_MODE_FIFO_KHR;
++#ifdef PS5WL_PS5
++    demo->frameCount = 300;
++#else
+     demo->frameCount = INT32_MAX;
++#endif
+     /* Autodetect suitable / best GPU by default */
+     demo->gpu_number = -1;
+     demo->width = 500;
+@@ -5101,6 +5106,11 @@
+ #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
+ int main(int argc, char **argv) {
+     struct demo demo;
++    if (ps5wl_client_init("ps5wl-vkcube", 9590) || ps5wl_vulkan_install()) {
++        ps5log("FAIL initializing Vulkan client runtime");
++        ps5log_flush_wait(30000);
++        return 1;
++    }
+ 
+     demo_init(&demo, argc, argv);
+     switch (demo.wsi_platform) {
+@@ -5193,6 +5203,8 @@
+     }
+ 
+     demo_cleanup(&demo);
++    ps5log("vkcube exit frames=%d validation_error=%d", demo.curFrame, validation_error);
++    ps5log_flush_wait(30000);
+ 
+     return validation_error;
+ }
+--- a/cube/cube_functions.h
++++ b/cube/cube_functions.h
+@@ -36,6 +36,7 @@
+ #endif
+ 
+ #include <vulkan/vulkan.h>
++#include "ps5log.h"
+ 
+ void* vulkan_library;
+ 
+@@ -198,12 +199,20 @@
+ 
+     vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
+ #else  // Assume everything else supports dlopen
+-    void* library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+-    if (library == NULL) library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
++    const char *path = getenv("PS5WL_VULKAN_LIBRARY");
++#ifdef PS5WL_PS5
++    if (!path) path = "/system_tmp/ps5wl/libvulkan.so.1";
++#else
++    if (!path) path = "libvulkan.so.1";
++#endif
++    void* library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+     if (library == NULL) {
++        ps5log("Vulkan dlopen path=%s error=%s", path, dlerror());
+         return VK_ERROR_INITIALIZATION_FAILED;
+     }
+     vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
++    if (!vkGetInstanceProcAddr)
++        vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vk_icdGetInstanceProcAddr");
+ #endif
+     if (vkGetInstanceProcAddr == NULL) {
+         return VK_ERROR_INITIALIZATION_FAILED;

@@ -1,22 +1,42 @@
-# PS5 backend boundary
+# PS5 wlroots backend
 
-This directory is reserved for the real wlroots PS5 backend. No PS5 display or
-input backend is implemented or selected by the current compositor. The PS5
-build currently offers the same headless and nested-Wayland backends as the host;
-a successful cross-link is not evidence of console rendering or input.
+`backend.c` implements wlroots 0.20 backend/output interfaces. It opens VideoOut
+as SYSTEM (`0xff`), registers two direct-memory scanouts with RegisterBuffers2,
+and exposes 1920x1080 at 60 Hz. Pixman buffers are read through wlroots data-ptr
+access and copied into the SDL 64KB_R_X tiling layout. Damage is accumulated per
+scanout, including damage from intervening flips; no full-frame copy is needed
+when only a small region changes. Scanout format is the SDL attribute
+`0x8000000022000000`. Source words use wlroots XRGB/ARGB (B,G,R,A bytes);
+prospero-win's matching VideoOut presenter documents its scanout as B,G,R.
 
-The future backend must implement wlroots backend/output/input contracts using
-VideoOut for output and scePad/sceKeyboard/sceMouse for input. Start with CPU
-pixman composition into linear shared buffers, convert damaged regions to the
-PS5 64KB_R_X layout, register buffers with VideoOut RegisterBuffers2, and drive
-frame callbacks from flip completion/equeue rather than a free-running timer.
-Do not introduce DRM/session dependencies or claim GPU support from the pixman
-path. Follow PLAN.md M1 hardware probes before assuming buffer mapping,
-VideoOut coexistence, process-shared memory or synchronization behavior.
+A thread blocks in the Sce flip equeue with a bounded shutdown timeout and
+writes completion timestamps to a pipe watched by the Wayland event loop.
+Only that event-loop thread sends wlroots present/frame events. Unchanged scenes
+re-flip the existing buffer, keeping the flip clock alive without rendering or
+copying. Backend teardown joins the thread, removes fd/timer sources, closes
+input/VideoOut/equeue and releases mapped/direct memory.
 
-Keep platform ownership, VideoOut buffer lifecycle and pad event translation
-here; protocol globals, xdg-shell, seat policy and window management remain in
-the platform-independent compositor. The real backend must propagate failures
-and own teardown for buffers, event queues and input handles. Future direct PS5
-launch also needs `/system_tmp` runtime/socket setup and the common/ps5log pull
-logger because elfldr supplies no argv/environment.
+`input.c` maps USB HID usages to evdev keys and reports relative mouse and
+DualSense events through wlroots keyboard/pointer interfaces. Mouse is resolved
+from sysmodule `0xa9` because the SDK has no mouse import library. The ABI
+declarations follow upstream SDL and prospero-win; observed initialization
+results and real events are logged, not inferred from device enumeration.
+
+`capture.c` serves a raw PNG on TCP 9531 when a host connects. It reads the
+completed tiled scanout back into RGB, not a pre-composition client buffer.
+This proves the pixels submitted to VideoOut; it does **not** capture the PS5
+system overlay. The SDK has no ScreenShot/Capture library stubs, and the
+public cursor exports lack a verified PS5 argument ABI, so capture uses our
+own readable direct memory and cursors use wlroots' built-in software fallback.
+The debug encoder uses bounded per-row storage and stored DEFLATE blocks.
+
+
+Sources:
+- https://github.com/ps5-payload-dev/SDL/tree/release-2.30.x-ps5/src/video/ps5
+- https://github.com/ps5-payload-dev/SDL/tree/release-2.30.x-ps5/src/joystick/ps5
+- https://github.com/mpereiraesaa/prospero-win/blob/main/native/pw_hid_ps5.h
+- https://github.com/ps5-payload-dev/elfldr/blob/master/socksrv.c
+
+The tile implementation is altered from SDL; its license is in `LICENSE.SDL`.
+GPU rendering is a client capability, not a claim about this pixman compositor.
+Build/link success alone is not evidence of hardware output or input.

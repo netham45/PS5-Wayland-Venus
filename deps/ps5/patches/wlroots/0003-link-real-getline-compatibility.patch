@@ -1,0 +1,11 @@
+Rationale: SDK declares but does not export getline; link the real POSIX buffered-input implementation used by Xcursor theme parsing.
+--- a/meson.build
++++ b/meson.build
+@@ -135,6 +135,7 @@
+ 
+ wlr_files = []
+ wlr_deps = [
++	dependency('ps5compat'),
+ 	wayland_server,
+ 	drm,
+ 	xkbcommon,

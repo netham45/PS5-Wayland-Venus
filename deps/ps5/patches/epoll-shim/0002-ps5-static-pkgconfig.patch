@@ -1,0 +1,24 @@
+Rationale: PS5 provides clocks in libc/kernel rather than librt; give pkgconf a real upstream release version for static metadata.
+--- a/epoll-shim.pc.cmakein
++++ b/epoll-shim.pc.cmakein
+@@ -6,7 +6,7 @@
+ Name: epoll-shim
+ URL: https://github.com/jiixyj/epoll-shim
+ Description: Small epoll implementation using kqueue
+-Version: 
++Version: 0.0.20240608
+ Libs: -L${libdir} -lepoll-shim
+-Libs.private: -pthread -lrt
++Libs.private: -pthread
+ Cflags: -I${includedir}/libepoll-shim
+--- a/epoll-shim-interpose.pc.cmakein
++++ b/epoll-shim-interpose.pc.cmakein
+@@ -6,7 +6,7 @@
+ Name: epoll-shim-interpose
+ URL: https://github.com/jiixyj/epoll-shim
+ Description: Small epoll implementation using kqueue (interposing wrapper)
+-Version: 
++Version: 0.0.20240608
+ Requires: epoll-shim
+ Libs: -L${libdir} -lepoll-shim-interpose
+ Cflags: -DEPOLL_SHIM_DISABLE_WRAPPER_MACROS

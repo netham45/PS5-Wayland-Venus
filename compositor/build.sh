@@ -30,13 +30,19 @@ if [[ $MODE == ps5 ]]; then
         exit 1
     fi
     source "$ROOT/toolchain/env.sh"
+    mkdir -p "$OUT"
+    clang "$ROOT/compositor/src/backend/ps5/keymap-gen.c" \
+        -I"$ROOT/build/host/sysroot/include" -L"$ROOT/build/host/sysroot/lib" \
+        -Wl,-rpath,"$ROOT/build/host/sysroot/lib" -lxkbcommon -o "$OUT/keymap-gen"
+    "$OUT/keymap-gen" "$ROOT/build/host/sysroot/share/X11/xkb" "$OUT/ps5wl-keymap.h"
     args+=(--cross-file "$ROOT/build/ps5/cross.ini" --native-file "$ROOT/build/ps5/native.ini" --default-library=static)
+    args+=("-Dconsole_test_seconds=${PS5WL_TEST_SECONDS:-0}")
 else
     export CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib
     export LDFLAGS="-fuse-ld=lld -Wl,-rpath,$PREFIX/lib"
 fi
 if [[ -f "$OUT/meson-private/coredata.dat" ]]; then
-    args+=(--reconfigure)
+    args+=(--reconfigure --clearcache)
 fi
 meson setup "$OUT" "$ROOT/compositor" "${args[@]}"
 meson compile -C "$OUT" -j "${JOBS:-$(getconf _NPROCESSORS_ONLN)}"

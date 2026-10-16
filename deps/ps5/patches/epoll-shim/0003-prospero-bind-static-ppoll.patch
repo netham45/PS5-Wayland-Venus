@@ -1,0 +1,15 @@
+Rationale: Console dlsym has no ppoll export; the SDK supplies it in static libc, so bind that real implementation directly.
+--- a/src/wrap.c
++++ b/src/wrap.c
+@@ -62,7 +62,11 @@
+ #ifdef __NetBSD__
+ 	WRAP(__pollts50);
+ #else
++#ifdef __PROSPERO__
++	wrap.real_ppoll = ppoll;
++#else
+ 	WRAP(ppoll);
++#endif
+ #endif
+ #endif
+ 	WRAP(fcntl);

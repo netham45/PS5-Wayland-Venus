@@ -1,0 +1,23 @@
+--- a/meson.build
++++ b/meson.build
+@@ -347,7 +347,7 @@
+ endif
+ # Its one display is VideoOut (src/vulkan/wsi/wsi_common_videoout.c), in the
+ # host model's builds too, rather than a DRM connector.
+-with_wsi_videoout = _vulkan_drivers.contains('amd') and get_option('radv-winsys') == 'ps5'
++with_wsi_videoout = _vulkan_drivers.contains('amd') and get_option('radv-winsys') == 'ps5' and not get_option('platforms').contains('wayland')
+ 
+ # This has to be below the freedreno_kmds check since that can change system_has_kms_drm
+ with_gallium_kmsro = with_gallium_drm or (system_has_kms_drm and with_gallium_zink)
+@@ -522,7 +522,10 @@
+ # The system modules RADV and its WSI call. A shared library links their stubs
+ # (it is linked with -Wl,--no-undefined), and pkg-config hands them to the
+ # program too, so that its crt initializes them through libSceSysmodule.
+-ps5_sysmodule_libs = with_radv_ps5_console ? ['-lSceAgc', '-lSceAgcDriver', '-lSceVideoOut'] : []
++ps5_sysmodule_libs = with_radv_ps5_console ? ['-lSceAgc', '-lSceAgcDriver'] : []
++if with_radv_ps5_console and with_wsi_videoout
++  ps5_sysmodule_libs += '-lSceVideoOut'
++endif
+ 
+ with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
+ if with_gfxstream_emulated_android

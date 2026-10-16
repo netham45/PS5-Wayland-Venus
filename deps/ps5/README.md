@@ -50,12 +50,31 @@ or compatibility copy is retained.
 - `epoll-shim/0001-prospero-no-capsicum-header-order.patch`: exclude Capsicum
   capability queries on PS5 (SDK has no Capsicum), and include `sys/types.h`
   before the old SDK's `sys/event.h`.
+- `epoll-shim/0002-ps5-static-pkgconfig.patch`: publish the actual upstream release
+  version and omit nonexistent librt from the PS5 static-link metadata.
+- `epoll-shim/0003-prospero-bind-static-ppoll.patch`: console `dlsym` has no
+  `ppoll` export, although SDK static libc implements it. Bind that real
+  implementation directly instead of aborting during dynamic symbol lookup.
 - `wayland/0001-freebsd-local-socket-level.patch`: use protocol level zero for
   local socket options when the old SDK lacks the later `SOL_LOCAL` spelling.
+- `wayland/0002-growable-closure-log-buffer.patch`: use
+  `shim/include/ps5wl_log_buffer.h` to preserve complete protocol diagnostics
+  without `open_memstream` or `funopen`, which the SDK does not provide.
+- `wayland/0003-prospero-set-socket-cloexec-explicitly.patch`: console probes
+  observed successful `SOCK_CLOEXEC` socket creation without the close-on-exec
+  flag. Always use Wayland's checked `fcntl(F_SETFD)` fallback on PS5.
+- `libdrm/0001-growable-modifier-name-buffer.patch`: preserve complete ARM/AMD
+  modifier names with the same checked growable buffer instead of unavailable
+  `open_memstream`.
 - `wlroots/0001-check-libc-before-libm-librt.patch`: detect actual libc math and
   clock symbols before looking for separate libraries that the SDK lacks.
 - `wlroots/0002-xcursor-request-getline.patch`: request FreeBSD's `getline`
   declaration when Xcursor deliberately undefines `_POSIX_C_SOURCE`.
+- `wlroots/0003-link-real-getline-compatibility.patch`: link `libps5compat.a`
+  through a normal pkg-config dependency. SDK headers declare `getline` but
+  the library does not implement it; `shim/getline.c` supplies the real
+  stream-locking, dynamically growing POSIX line reader, including embedded
+  NULs, unterminated final lines and EOF/error handling.
 
 libxkbcommon 1.11 has no tests-off switch. The builder explicitly compiles only
 its enabled installable library, rather than unrelated test/fuzz/benchmark
@@ -69,6 +88,22 @@ warnings are not suppressed and no math behavior is stubbed.
 The input event keycode constants are a separately hashed Linux v5.8 UAPI header,
 pinned to its actual Git commit, matching FreeBSD's evdev-proto header baseline.
 This is protocol data, not an input backend or a Linux kernel implementation.
+
+The log buffer regression test checks expansion, concatenation, numeric
+formatting and counted embedded NULs:
+
+```sh
+env/run clang -std=c11 -Wall -Wextra -Werror deps/ps5/shim/test_log_buffer.c -o build/ps5/test-log-buffer
+env/run build/ps5/test-log-buffer
+```
+
+The getline regression forces multiple buffer expansions and checks newline
+retention, counted embedded NULs, an unterminated final line and EOF:
+
+```sh
+env/run clang -std=c11 -Wall -Wextra -Werror deps/ps5/shim/getline.c deps/ps5/shim/test_getline.c -o build/ps5/test-getline
+env/run build/ps5/test-getline
+```
 
 ## Link/runtime check
 

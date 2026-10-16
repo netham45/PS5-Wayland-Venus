@@ -1,0 +1,124 @@
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -286,8 +286,10 @@
+    switch (id) {
+       case CLOCK_MONOTONIC:
+          return VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
++#ifdef CLOCK_MONOTONIC_RAW
+       case CLOCK_MONOTONIC_RAW:
+          return VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
++#endif
+       default:
+          /* Default fallback. Will likely not be used, but is safe to use. */
+          return VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
+@@ -300,8 +302,10 @@
+    switch (id) {
+       case VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR:
+          return CLOCK_MONOTONIC;
++#ifdef CLOCK_MONOTONIC_RAW
+       case VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR:
+          return CLOCK_MONOTONIC_RAW;
++#endif
+       default:
+          /* Default fallback. Will not be used. */
+          return 0;
+@@ -1008,7 +1012,8 @@
+ {
+    struct wsi_wl_display *display = data;
+ 
+-   wsi_wl_display_add_wl_shm_format(display, &display->formats, format);
++   if (display->sw)
++      wsi_wl_display_add_wl_shm_format(display, &display->formats, format);
+ }
+ 
+ static const struct wl_shm_listener shm_listener = {
+@@ -1487,12 +1492,12 @@
+ {
+    struct wsi_wl_display *display = data;
+ 
+-   if (display->sw) {
+-      if (strcmp(interface, wl_shm_interface.name) == 0) {
+-         display->wl_shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+-         wl_shm_add_listener(display->wl_shm, &shm_listener, display);
+-      }
+-   } else {
++   /* Bind shm even for hardware devices: a compositor need not offer dma-buf. */
++   if (strcmp(interface, wl_shm_interface.name) == 0) {
++      display->wl_shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
++      wl_shm_add_listener(display->wl_shm, &shm_listener, display);
++   }
++   if (!display->sw) {
+       if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0 && version >= 3) {
+          display->wl_dmabuf =
+             wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface,
+@@ -1645,6 +1650,11 @@
+ 
+    /* Round-trip to get wl_shm and zwp_linux_dmabuf_v1 globals */
+    wl_display_roundtrip_queue(display->wl_display, display->queue);
++   /* This selects the presentation transport, not a software Vulkan device.
++    * Keep wsi_device->sw unchanged so the normal GPU image-to-buffer blit,
++    * host visibility barrier and present fence are used for CPU images.
++    */
++   display->sw |= display->wl_dmabuf == NULL;
+    if (!display->wl_dmabuf && !display->wl_shm) {
+       result = VK_ERROR_SURFACE_LOST_KHR;
+       goto fail_registry;
+@@ -2079,7 +2089,11 @@
+          /* We could deal with esoteric clock domains by exposing VK_TIME_DOMAIN_SWAPCHAIN or PRESENT_STAGE_LOCAL,
+           * but that requires a lot more scaffolding, and there's no need to add extra complexity if we can
+           * get away with this. */
+-         if (clock_id != CLOCK_MONOTONIC && clock_id != CLOCK_MONOTONIC_RAW)
++         if (clock_id != CLOCK_MONOTONIC
++#ifdef CLOCK_MONOTONIC_RAW
++             && clock_id != CLOCK_MONOTONIC_RAW
++#endif
++            )
+             break;
+ 
+          /* Presentation timing spec talks about the reported time targeting "pixel being visible".
+@@ -3528,8 +3542,9 @@
+    case WSI_WL_BUFFER_GPU_SHM:
+    case WSI_WL_BUFFER_SHM_MEMCPY: {
+       if (chain->buffer_type == WSI_WL_BUFFER_SHM_MEMCPY) {
+-         wsi_wl_alloc_image_shm(&image->base, image->base.row_pitches[0] *
+-                                              chain->extent.height);
++         if (!wsi_wl_alloc_image_shm(&image->base, image->base.row_pitches[0] *
++                                                 chain->extent.height))
++            return VK_ERROR_OUT_OF_HOST_MEMORY;
+       }
+       assert(image->shm_ptr != NULL);
+ 
+@@ -3822,11 +3837,11 @@
+    struct wsi_drm_image_params drm_image_params;
+    uint32_t num_drm_modifiers = 0;
+    const uint64_t *drm_modifiers = NULL;
+-   if (wsi_device->sw) {
++   if (wsi_wl_surface->display->sw) {
+       cpu_image_params = (struct wsi_cpu_image_params) {
+          .base.image_type = WSI_IMAGE_TYPE_CPU,
+       };
+-      if (wsi_device->has_import_memory_host &&
++      if (wsi_device->sw && wsi_device->has_import_memory_host &&
+           !(WSI_DEBUG & WSI_DEBUG_NOSHM)) {
+          buffer_type = WSI_WL_BUFFER_GPU_SHM;
+          cpu_image_params.alloc_shm = wsi_wl_alloc_image_shm;
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -2891,9 +2891,14 @@
+ #endif
+       }
+ 
+-      if (wsi->sw) {
+-         wsi->WaitForFences(vk_device_to_handle(dev),
+-                            1, &swapchain->fences[image_index], true, ~0ull);
++      /* CPU presentation consumes the mapped staging buffer on this thread,
++       * even when a hardware device produced it.
++       */
++      if (wsi->sw || image->cpu_map != NULL) {
++         results[i] = wsi->WaitForFences(vk_device_to_handle(dev),
++                                        1, &swapchain->fences[image_index], true, ~0ull);
++         if (results[i] != VK_SUCCESS)
++            continue;
+       }
+ 
+       const VkPresentRegionKHR *region = NULL;

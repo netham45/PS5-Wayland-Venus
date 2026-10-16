@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ps5log.h"
 
 #include <sys/mman.h>
@@ -12,7 +13,11 @@
 #include <time.h>
 #include <unistd.h>
 
-/* SDK samples/hello_world uses this kernel notification request layout. */
+/*
+ * Notification ABI and call sequence mirror ps5-payload-dev/sdk v0.44,
+ * samples/hello_world/main.c:21-37 (Copyright 2023 John Törnblom,
+ * GPL-3.0-or-later).
+ */
 struct notify_request {
     char reserved[45];
     char message[3075];

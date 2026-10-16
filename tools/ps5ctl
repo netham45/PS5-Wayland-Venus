@@ -163,7 +163,7 @@ def expect_ok(text):
         raise Error(f"Payload Manager rejected action:\n{text}")
 
 
-def logs(host, port, retry):
+def connect_stream(host, port, retry):
     deadline = time.monotonic() + retry
     while True:
         try:
@@ -171,13 +171,39 @@ def logs(host, port, retry):
             break
         except OSError as error:
             if time.monotonic() >= deadline:
-                raise Error(f"Cannot connect to logs at {host}:{port}: {error}") from error
+                raise Error(f"Cannot connect to {host}:{port}: {error}") from error
             time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+    return connection
+
+
+def logs(host, port, retry):
+    connection = connect_stream(host, port, retry)
     with connection:
         connection.settimeout(None)
         while data := connection.recv(65536):
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
+
+
+def screenshot(host, port, retry, output):
+    """Pull the compositor's completed scanout PNG (not system overlays)."""
+    output = Path(output)
+    temporary = output.with_name(output.name + ".part")
+    try:
+        with connect_stream(host, port, retry) as connection:
+            connection.settimeout(15)
+            with connection.makefile("rb") as source:
+                signature = source.read(8)
+                if signature != b"\x89PNG\r\n\x1a\n":
+                    raise Error(f"Screenshot endpoint returned invalid PNG signature: {signature!r}")
+                with temporary.open("wb") as destination:
+                    destination.write(signature)
+                    while data := source.read(65536):
+                        destination.write(data)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print(f"Saved {output} ({output.stat().st_size} bytes)")
 
 
 def main():
@@ -197,13 +223,21 @@ def main():
     sub = commands.add_parser("logs")
     sub.add_argument("--port", type=int, default=9530)
     sub.add_argument("--retry", type=float, default=10, metavar="SECONDS")
+    sub = commands.add_parser("screenshot", help="pull completed compositor scanout PNG (excludes system overlays)")
+    sub.add_argument("--port", type=int, default=9531)
+    sub.add_argument("--retry", type=float, default=10, metavar="SECONDS")
+    sub.add_argument("--output", required=True)
     commands.add_parser("pmlog").add_argument("--events", action="store_true", help="stream /events instead of GET /log")
     args = parser.parse_args()
     try:
-        if args.command == "logs":
+        if args.command in ("logs", "screenshot"):
             if not 1 <= args.port <= 65535 or args.retry < 0:
-                raise Error("Log port must be 1..65535; retry seconds must be nonnegative")
-            logs(os.environ.get("PS5_HOST", "192.168.3.211"), args.port, args.retry)
+                raise Error("TCP port must be 1..65535; retry seconds must be nonnegative")
+            host = os.environ.get("PS5_HOST", "192.168.3.211")
+            if args.command == "logs":
+                logs(host, args.port, args.retry)
+            else:
+                screenshot(host, args.port, args.retry, args.output)
             return 0
         client = Client()
         if args.command in ("upload", "run"):

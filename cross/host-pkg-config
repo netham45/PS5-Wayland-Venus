@@ -3,6 +3,6 @@ set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 export PKG_CONFIG_DIR=
 export PKG_CONFIG_PATH=
-export PKG_CONFIG_LIBDIR="$root/build/host/sysroot/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="$root/build/host/sysroot/lib/pkgconfig:$root/build/host/sysroot/share/pkgconfig"
 unset PKG_CONFIG_SYSROOT_DIR DESTDIR
 exec pkg-config "$@"

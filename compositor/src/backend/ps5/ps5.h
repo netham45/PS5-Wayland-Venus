@@ -4,6 +4,7 @@
 #define PS5WL_PS5_H
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 #include <sys/event.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -56,5 +57,9 @@ struct ps5_input;
 struct ps5_input *ps5_input_create(struct wlr_backend *, struct wl_display *);
 void ps5_input_start(struct ps5_input *);
 void ps5_input_destroy(struct ps5_input *);
+struct ps5_capture;
+struct ps5_capture *ps5_capture_create(struct wl_event_loop *, unsigned, unsigned,
+ uint32_t (*)(void *, unsigned, unsigned), void *);
+void ps5_capture_destroy(struct ps5_capture *);
 void ps5_autostart(void);
 #endif

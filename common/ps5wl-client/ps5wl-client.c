@@ -1,3 +1,9 @@
+/* SDK sys/mman.h:168 exposes SHM_ANON only in the default BSD namespace.
+ * sys/cdefs.h:715-775 disables that namespace for strict POSIX/XSI builds. */
+#if defined(PS5WL_PS5) || defined(__FreeBSD__)
+#undef _POSIX_C_SOURCE
+#undef _XOPEN_SOURCE
+#endif
 #define _GNU_SOURCE
 #include "ps5wl-client.h"
 #include "../ps5log/ps5log.h"
@@ -55,7 +61,8 @@ int ps5wl_client_shm(size_t size) {
     int fd = memfd_create("ps5wl-client", MFD_CLOEXEC | MFD_ALLOW_SEALING);
 #endif
     if (fd < 0) return -1;
-    if (ftruncate(fd, (off_t)size) < 0) {
+    /* PS5 ignores some *_CLOEXEC creation flags; set descriptor flags explicitly. */
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 || ftruncate(fd, (off_t)size) < 0) {
         int saved = errno;
         close(fd);
         errno = saved;

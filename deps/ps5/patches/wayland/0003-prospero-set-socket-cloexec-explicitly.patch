@@ -1,0 +1,17 @@
+Rationale: Console probes show SOCK_CLOEXEC succeeds but ignores the flag; use the existing checked fcntl fallback on PS5.
+--- a/src/wayland-os.c
++++ b/src/wayland-os.c
+@@ -78,11 +78,13 @@
+ {
+ 	int fd;
+ 
++#ifndef __PROSPERO__
+ 	fd = wl_socket(domain, type | SOCK_CLOEXEC, protocol);
+ 	if (fd >= 0)
+ 		return fd;
+ 	if (errno != EINVAL)
+ 		return -1;
++#endif
+ 
+ 	fd = wl_socket(domain, type, protocol);
+ 	return set_cloexec_or_close(fd);

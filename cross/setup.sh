@@ -40,6 +40,6 @@ with (root / 'build/ps5/cross.ini').open('w') as stream:
 pkg-config = '{root}/cross/host-pkg-config'
 wayland-scanner = '{root}/build/host/sysroot/bin/wayland-scanner'
 [properties]
-pkg_config_libdir = '{root}/build/host/sysroot/lib/pkgconfig'
+pkg_config_libdir = ['{root}/build/host/sysroot/lib/pkgconfig', '{root}/build/host/sysroot/share/pkgconfig']
 """)
 PY

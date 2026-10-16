@@ -9,6 +9,8 @@ int main(void) {
         fprintf(stderr, "ps5log_init failed: %d\n", errno);
         return 1;
     }
+    ps5log("starting dependency calls");
+    ps5log_flush_wait(2000);
     wlr_log_init(WLR_DEBUG, NULL);
     ps5log("wlr_log_init: OK");
     struct wl_display *display = wl_display_create();

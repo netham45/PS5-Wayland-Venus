@@ -1,0 +1,2 @@
+option('console_test_seconds', type: 'integer', value: 0, min: 0, max: 90,
+  description: 'Terminate PS5 hardware validation after this many seconds (0 disables)')

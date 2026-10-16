@@ -30,6 +30,16 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
+#include <stdarg.h>
+#include <wlr/types/wlr_screencopy_v1.h>
+#ifdef PS5WL_PS5
+#include "backend/ps5/ps5.h"
+#include "ps5log.h"
+#include "ps5wl-keymap.h"
+#else
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/types/wlr_virtual_pointer_v1.h>
+#endif
 
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
@@ -74,6 +84,10 @@ struct tinywl_server {
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
+	#ifndef PS5WL_PS5
+	struct wl_listener virtual_keyboard;
+	struct wl_listener virtual_pointer;
+	#endif
 };
 
 struct tinywl_output {
@@ -98,6 +112,9 @@ struct tinywl_toplevel {
 	struct wl_listener request_resize;
 	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
+	unsigned commits;
+	bool fullscreen;
+	struct wlr_box restore_geometry;
 };
 
 struct tinywl_popup {
@@ -190,6 +207,7 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 		wl_display_terminate(server->wl_display);
 		break;
 	case XKB_KEY_F1:
+	case XKB_KEY_Tab:
 		/* Cycle to the next toplevel */
 		if (wl_list_length(&server->toplevels) < 2) {
 			break;
@@ -222,13 +240,20 @@ static void keyboard_handle_key(
 
 	bool handled = false;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-	if ((modifiers & WLR_MODIFIER_ALT) &&
-			event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+			((modifiers & WLR_MODIFIER_LOGO) || (modifiers & WLR_MODIFIER_ALT))) {
 		/* If alt is held down and this button was _pressed_, we attempt to
 		 * process it as a compositor keybinding. */
 		for (int i = 0; i < nsyms; i++) {
 			handled = handle_keybinding(server, syms[i]);
 		}
+	}
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+			(modifiers & (WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT)) ==
+				(WLR_MODIFIER_CTRL | WLR_MODIFIER_ALT) &&
+			event->keycode == 14) {
+		wl_display_terminate(server->wl_display);
+		handled = true;
 	}
 
 	if (!handled) {
@@ -261,13 +286,19 @@ static void server_new_keyboard(struct tinywl_server *server,
 	keyboard->server = server;
 	keyboard->wlr_keyboard = wlr_keyboard;
 
-	/* We need to prepare an XKB keymap and assign it to the keyboard. This
-	 * assumes the defaults (e.g. layout = "us"). */
 	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, NULL,
-		XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-	wlr_keyboard_set_keymap(wlr_keyboard, keymap);
+#ifdef PS5WL_PS5
+	struct xkb_keymap *keymap = xkb_keymap_new_from_string(context, ps5wl_keymap,
+		XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+#else
+	struct xkb_keymap *keymap = wlr_keyboard->keymap ?
+		xkb_keymap_ref(wlr_keyboard->keymap) :
+		xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+#endif
+	if (!keymap || !wlr_keyboard_set_keymap(wlr_keyboard, keymap)) {
+		wlr_log(WLR_ERROR, "Failed to initialize keyboard keymap");
+		wl_display_terminate(server->wl_display);
+	}
 	xkb_keymap_unref(keymap);
 	xkb_context_unref(context);
 	wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
@@ -296,6 +327,7 @@ static void server_new_pointer(struct tinywl_server *server,
 }
 
 static void server_new_input(struct wl_listener *listener, void *data) {
+	(void)data;
 	/* This event is raised by the backend when a new input device becomes
 	 * available. */
 	struct tinywl_server *server =
@@ -702,11 +734,21 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
 
 	if (toplevel->xdg_toplevel->base->initial_commit) {
-		/* When an xdg_surface performs an initial commit, the compositor must
-		 * reply with a configure so the client can map the surface. tinywl
-		 * configures the xdg_toplevel with 0,0 size to let the client pick the
-		 * dimensions itself. */
+#ifdef PS5WL_PS5
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 1920, 1080);
+		wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
+#else
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+#endif
+		wlr_log(WLR_INFO, "xdg toplevel initial commit app_id=%s",
+			toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "(unset)");
+	} else if (toplevel->xdg_toplevel->base->surface->current.buffer) {
+		if (++toplevel->commits == 1 || toplevel->commits % 120 == 0) {
+			wlr_log(WLR_INFO, "client surface committed %dx%d count=%u",
+				toplevel->xdg_toplevel->base->surface->current.width,
+				toplevel->xdg_toplevel->base->surface->current.height,
+				toplevel->commits);
+		}
 	}
 }
 
@@ -798,12 +840,33 @@ static void xdg_toplevel_request_maximize(
 
 static void xdg_toplevel_request_fullscreen(
 		struct wl_listener *listener, void *data) {
-	/* Just as with request_maximize, we must send a configure here. */
 	struct tinywl_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_fullscreen);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
+	if (fullscreen && !toplevel->fullscreen) {
+		toplevel->restore_geometry = toplevel->xdg_toplevel->base->geometry;
+		toplevel->restore_geometry.x = toplevel->scene_tree->node.x;
+		toplevel->restore_geometry.y = toplevel->scene_tree->node.y;
 	}
+	struct wlr_output *output = toplevel->xdg_toplevel->requested.fullscreen_output;
+	if (!output && !wl_list_empty(&toplevel->server->outputs)) {
+		struct tinywl_output *first = wl_container_of(
+			toplevel->server->outputs.next, first, link);
+		output = first->wlr_output;
+	}
+	if (fullscreen && output) {
+		int width, height;
+		wlr_output_effective_resolution(output, &width, &height);
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, width, height);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node, 0, 0);
+	} else if (toplevel->fullscreen) {
+		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+			toplevel->restore_geometry.width, toplevel->restore_geometry.height);
+		wlr_scene_node_set_position(&toplevel->scene_tree->node,
+			toplevel->restore_geometry.x, toplevel->restore_geometry.y);
+	}
+	toplevel->fullscreen = fullscreen;
+	wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, fullscreen);
 }
 
 static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
@@ -896,11 +959,51 @@ static int terminate_display(int signal_number, void *data) {
 	return 0;
 }
 
-int main(int argc, char *argv[]) {
+#ifdef PS5WL_PS5
+#if PS5WL_TEST_SECONDS > 0
+static int terminate_validation(void *data) {
+	ps5log("bounded hardware validation timeout; releasing VideoOut");
+	wl_display_terminate(data);
+	return 0;
+}
+#endif
+static void payload_log(enum wlr_log_importance importance, const char *fmt, va_list args) {
+	(void)importance;
+	char line[1024];
+	vsnprintf(line, sizeof(line), fmt, args);
+	ps5log("%s", line);
+}
+#else
+static void virtual_keyboard_created(struct wl_listener *listener, void *data) {
+	struct tinywl_server *server = wl_container_of(listener, server, virtual_keyboard);
+	struct wlr_virtual_keyboard_v1 *keyboard = data;
+	server_new_keyboard(server, &keyboard->keyboard.base);
+	wlr_seat_set_capabilities(server->seat,
+		WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER);
+}
+static void virtual_pointer_created(struct wl_listener *listener, void *data) {
+	struct tinywl_server *server = wl_container_of(listener, server, virtual_pointer);
+	struct wlr_virtual_pointer_v1_new_pointer_event *event = data;
+	server_new_pointer(server, &event->new_pointer->pointer.base);
+	wlr_seat_set_capabilities(server->seat, WL_SEAT_CAPABILITY_POINTER |
+		(wl_list_empty(&server->keyboards) ? 0 : WL_SEAT_CAPABILITY_KEYBOARD));
+}
+#endif
+static int compositor_main(int argc, char *argv[]) {
+#ifdef PS5WL_PS5
+	if (ps5log_init("ps5wl-compositor", 9530)) return 1;
+	wlr_log_init(WLR_INFO, payload_log);
+	setenv("XDG_RUNTIME_DIR", "/system_tmp", true);
+#else
 	wlr_log_init(WLR_DEBUG, NULL);
+#endif
 	char *startup_cmd = NULL;
 	const char *backend = getenv("PS5WL_BACKEND");
 	const char *socket_name = NULL;
+#ifdef PS5WL_PS5
+	backend = "ps5";
+	socket_name = "/system_tmp/wayland-0";
+#endif
 	if (backend == NULL) {
 		backend = getenv("WLR_BACKENDS");
 	}
@@ -928,8 +1031,12 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	if (optind < argc ||
+#ifdef PS5WL_PS5
+			strcmp(backend, "ps5") != 0) {
+#else
 			(strcmp(backend, "headless") != 0 && strcmp(backend, "wayland") != 0)) {
-		fprintf(stderr, "Expected -b headless|wayland and no positional arguments\n");
+#endif
+		fprintf(stderr, "Invalid backend or positional arguments\n");
 		return 1;
 	}
 	if (setenv("WLR_BACKENDS", backend, true) < 0 ||
@@ -954,10 +1061,16 @@ int main(int argc, char *argv[]) {
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
-	/* Restrict autocreation to the explicitly selected portable backend. */
+#ifdef PS5WL_PS5
+	server.backend = ps5_backend_create(server.wl_display);
+#else
 	server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.wl_display), NULL);
+#endif
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
+#ifdef PS5WL_PS5
+		ps5log_flush_wait(10000);
+#endif
 		return 1;
 	}
 
@@ -968,6 +1081,8 @@ int main(int argc, char *argv[]) {
 	server.renderer = wlr_renderer_autocreate(server.backend);
 	if (server.renderer == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_renderer");
+		wlr_backend_destroy(server.backend);
+		wl_display_destroy(server.wl_display);
 		return 1;
 	}
 
@@ -981,6 +1096,9 @@ int main(int argc, char *argv[]) {
 		server.renderer);
 	if (server.allocator == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
+		wlr_renderer_destroy(server.renderer);
+		wlr_backend_destroy(server.backend);
+		wl_display_destroy(server.wl_display);
 		return 1;
 	}
 
@@ -994,6 +1112,7 @@ int main(int argc, char *argv[]) {
 	wlr_compositor_create(server.wl_display, 5, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
+	wlr_screencopy_manager_v1_create(server.wl_display);
 
 	/* Creates an output layout, which a wlroots utility for working with an
 	 * arrangement of screens in a physical layout. */
@@ -1080,6 +1199,16 @@ int main(int argc, char *argv[]) {
 	server.request_set_selection.notify = seat_request_set_selection;
 	wl_signal_add(&server.seat->events.request_set_selection,
 			&server.request_set_selection);
+#ifndef PS5WL_PS5
+	struct wlr_virtual_keyboard_manager_v1 *vkeyboard =
+		wlr_virtual_keyboard_manager_v1_create(server.wl_display);
+	struct wlr_virtual_pointer_manager_v1 *vpointer =
+		wlr_virtual_pointer_manager_v1_create(server.wl_display);
+	server.virtual_keyboard.notify = virtual_keyboard_created;
+	wl_signal_add(&vkeyboard->events.new_virtual_keyboard, &server.virtual_keyboard);
+	server.virtual_pointer.notify = virtual_pointer_created;
+	wl_signal_add(&vpointer->events.new_virtual_pointer, &server.virtual_pointer);
+#endif
 
 	/* Add a Unix socket to the Wayland display. */
 	const char *socket = socket_name;
@@ -1102,15 +1231,29 @@ int main(int argc, char *argv[]) {
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
+	wlr_cursor_set_xcursor(server.cursor, server.cursor_mgr, "default");
+#ifdef PS5WL_PS5
+	wlr_cursor_warp_closest(server.cursor, NULL, 960, 540);
+#endif
+#if defined(PS5WL_PS5) && PS5WL_TEST_SECONDS > 0
+	struct wl_event_source *test_timeout = wl_event_loop_add_timer(loop,
+		terminate_validation, server.wl_display);
+	wl_event_source_timer_update(test_timeout, PS5WL_TEST_SECONDS * 1000);
+	ps5log("bounded hardware validation shutdown in %d seconds", PS5WL_TEST_SECONDS);
+#endif
 
 	/* Set the WAYLAND_DISPLAY environment variable to our socket and run the
 	 * startup command if requested. */
 	setenv("WAYLAND_DISPLAY", socket, true);
+#ifdef PS5WL_PS5
+	ps5_autostart();
+#else
 	if (startup_cmd && fork() == 0) {
 		execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
 		perror("exec startup command");
 		_exit(127);
 	}
+#endif
 	/* Run the Wayland event loop. This does not return until you exit the
 	 * compositor. Starting the backend rigged up all of the necessary event
 	 * loop configuration to listen to libinput events, DRM events, generate
@@ -1137,10 +1280,17 @@ int main(int argc, char *argv[]) {
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.pointer_focus_change.link);
 	wl_list_remove(&server.request_set_selection.link);
+#ifndef PS5WL_PS5
+	wl_list_remove(&server.virtual_keyboard.link);
+	wl_list_remove(&server.virtual_pointer.link);
+#endif
 
 	wl_list_remove(&server.new_output.link);
 	wl_event_source_remove(sigint);
 	wl_event_source_remove(sigterm);
+#if defined(PS5WL_PS5) && PS5WL_TEST_SECONDS > 0
+	wl_event_source_remove(test_timeout);
+#endif
 
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
@@ -1149,5 +1299,21 @@ int main(int argc, char *argv[]) {
 	wlr_renderer_destroy(server.renderer);
 	wlr_backend_destroy(server.backend);
 	wl_display_destroy(server.wl_display);
+#ifdef PS5WL_PS5
+	ps5log("compositor clean shutdown");
+	ps5log_flush_wait(1000);
+	_exit(0);
+#endif
 	return 0;
+}
+
+int main(int argc, char *argv[]) {
+	int status = compositor_main(argc, argv);
+#ifdef PS5WL_PS5
+	/* SDK payload main may be a thread inside the signed launcher process. */
+	ps5log_flush_wait(1000);
+	_exit(status);
+#else
+	return status;
+#endif
 }

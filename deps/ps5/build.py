@@ -96,6 +96,19 @@ def meson(name, options):
             installed_pc.rmdir()
 
 
+def compat():
+    binary = BUILD / 'deps/ps5compat'
+    binary.mkdir(parents=True, exist_ok=True)
+    library = PREFIX / 'lib/libps5compat.a'
+    library.parent.mkdir(parents=True, exist_ok=True)
+    run(['prospero-clang', '-std=c11', '-O2', '-fPIC', '-c',
+         ROOT / 'deps/ps5/shim/getline.c', '-o', binary / 'getline.o'])
+    run(['prospero-ar', 'rcs', library, binary / 'getline.o'])
+    pc = PREFIX / 'lib/pkgconfig/ps5compat.pc'
+    pc.parent.mkdir(parents=True, exist_ok=True)
+    pc.write_text(f'prefix={PREFIX}\nName: ps5compat\nDescription: PS5 POSIX getline compatibility\nVersion: 1\nLibs: -L${{prefix}}/lib -lps5compat\n')
+
+
 def input_codes():
     header = download('linux-input-event-codes')
     target = PREFIX / 'include/linux'
@@ -123,26 +136,15 @@ def epoll():
     run(['cmake', '-S', src, '-B', binary, '-G', 'Ninja',
          '-DCMAKE_TOOLCHAIN_FILE=' + str(ROOT / 'cross/prospero.cmake'),
          '-DCMAKE_INSTALL_PREFIX=' + str(PREFIX), '-DCMAKE_INSTALL_LIBDIR=lib',
-         '-DCMAKE_INSTALL_PKGCONFIGDIR=lib/pkgconfig', '-DBUILD_SHARED_LIBS=OFF',
+         '-DCMAKE_INSTALL_PKGCONFIGDIR=' + str(PREFIX / 'lib/pkgconfig'), '-DBUILD_SHARED_LIBS=OFF',
          '-DBUILD_TESTING=OFF', '-DALLOWS_ONESHOT_TIMERS_WITH_TIMEOUT_ZERO=OFF'])
     run(['cmake', '--build', binary, '-j', JOBS])
     run(['cmake', '--install', binary])
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--only', choices=[name for name in PINS if name != 'expat'],
-                        help='Rebuild one target dependency after its prerequisites')
-    args = parser.parse_args()
-    if os.environ.get('PS5WL_BUILD_ENV') != '1':
-        raise SystemExit('Use deps/ps5/build.sh inside env/run')
-    PREFIX.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(ROOT / 'deps/ps5/shim/include', PREFIX / 'include', dirs_exist_ok=True)
-    scanner = ROOT / 'build/host/sysroot/bin/wayland-scanner'
-    if not scanner.is_file() and args.only not in ('libffi', 'epoll-shim'):
-        raise SystemExit('Build pinned host dependencies first: make deps-host (native wayland-scanner required)')
-    ENV['PATH'] = str(scanner.parent) + os.pathsep + ENV['PATH']
     tasks = [
+        ('ps5compat', compat),
         ('linux-input-event-codes', input_codes),
         ('libffi', ffi),
         ('epoll-shim', epoll),
@@ -155,6 +157,18 @@ def main():
         # Pixman, headless/Wayland backends and shm allocator are unconditional in 0.20.
         ('wlroots', lambda: meson('wlroots', ['-Dbackends=[]', '-Drenderers=[]', '-Dallocators=[]', '-Dsession=disabled', '-Dxwayland=disabled', '-Dexamples=false'])),
     ]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--only', choices=[name for name, _ in tasks],
+                        help='Rebuild one target dependency after its prerequisites')
+    args = parser.parse_args()
+    if os.environ.get('PS5WL_BUILD_ENV') != '1':
+        raise SystemExit('Use deps/ps5/build.sh inside env/run')
+    PREFIX.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(ROOT / 'deps/ps5/shim/include', PREFIX / 'include', dirs_exist_ok=True)
+    scanner = ROOT / 'build/host/sysroot/bin/wayland-scanner'
+    if not scanner.is_file() and args.only not in ('libffi', 'epoll-shim'):
+        raise SystemExit('Build pinned host dependencies first: make deps-host (native wayland-scanner required)')
+    ENV['PATH'] = str(scanner.parent) + os.pathsep + ENV['PATH']
     for name, build in tasks:
         if args.only and args.only != name:
             continue

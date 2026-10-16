@@ -14,6 +14,9 @@ You should have received a copy of the GNU General Public License
 along with this program; see the file COPYING. If not, see
 <http://www.gnu.org/licenses/>.  */
 
+/* Ported from websrv 7748df9 src/ps5/hbldr.c:45-453.
+ * Its signed-launch / ptrace sequence is retained; project-specific changes
+ * are documented in README.md. No unsigned-title ABI is invented here. */
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -45,10 +48,10 @@ along with this program; see the file COPYING. If not, see
 
 
 #define PSNOW_EBOOT "/system_ex/app/NPXS40106/eboot.bin"
-#define FAKE_PATH "/system_ex/app/PS5W00002"
+#define FAKE_PATH "/system_ex/app/PSWL00002"
 
-#define IOVEC_ENTRY(x) {x ? x : 0, \
-			x ? strlen(x)+1 : 0}
+#define IOVEC_ENTRY(x) {(x) ? (x) : 0, \
+			(x) ? strlen(x)+1 : 0}
 #define IOVEC_SIZE(x) (sizeof(x) / sizeof(struct iovec))
 
 
@@ -57,8 +60,8 @@ static const char param_json[] = "{\n"
   "  \"attribute\": 1,\n"
   "  \"attribute2\": 0,\n"
   "  \"attribute3\": 4,\n"
-  "  \"titleId\": \"PS5W00002\",\n"
-  "  \"contentId\": \"IV9999-PS5W00002_00-PS5WAYLANDBIGAPP0\",\n"
+  "  \"titleId\": \"PSWL00002\",\n"
+  "  \"contentId\": \"IV9999-PSWL00002_00-PS5WAYLAND000000\",\n"
   "  \"localizedParameters\": {\n"
   "    \"defaultLanguage\": \"en-US\",\n"
   "    \"en-US\": {\n"
@@ -82,15 +85,13 @@ int sceUserServiceGetForegroundUser(uint32_t *user_id);
 int sceUserServiceTerminate(void);
 
 int sceSystemServiceGetAppIdOfRunningBigApp(void);
-int sceSystemServiceKillApp(int app_id, int how, int reason, int core_dump);
 int sceSystemServiceLaunchApp(const char* title_id, char** argv,
 			      app_launch_ctx_t* ctx);
 
-int sceKernelGetAppState(int app_id, int*, int*);
 
 
 static int
-remount_system_ex(void) {
+remount_system_ex(int flags) {
   struct iovec iov[] = {
     IOVEC_ENTRY("from"),      IOVEC_ENTRY("/dev/ssd0.system_ex"),
     IOVEC_ENTRY("fspath"),    IOVEC_ENTRY("/system_ex"),
@@ -99,11 +100,21 @@ remount_system_ex(void) {
     IOVEC_ENTRY("timezone"),  IOVEC_ENTRY("static"),
     IOVEC_ENTRY("async"),     IOVEC_ENTRY(NULL),
     IOVEC_ENTRY("ignoreacl"), IOVEC_ENTRY(NULL),
+    /* FreeBSD releng/11.0 sys/kern/vfs_mount.c:192,225,635-640,944:
+     * explicitly replace inherited "ro" when upgrading an nmount mount. */
+    IOVEC_ENTRY((flags & MNT_RDONLY) ? "ro" : "noro"), IOVEC_ENTRY(NULL),
   };
 
-  if(nmount(iov, IOVEC_SIZE(iov), MNT_UPDATE)) {
-    return -1;
+  int result=nmount(iov, IOVEC_SIZE(iov), MNT_UPDATE | flags);
+  ps5log("nmount system_ex flags=0x%x result=%d errno=%d", flags, result, errno);
+  struct statfs current;
+  const char *paths[]={"/system_ex",FAKE_PATH};
+  for(size_t i=0;i<2;i++) {
+    if(!statfs(paths[i],&current))
+      ps5log("statfs %s flags=0x%lx type=%s mount=%s from=%s",paths[i],
+             (unsigned long)current.f_flags,current.f_fstypename,current.f_mntonname,current.f_mntfromname);
   }
+  if(result) return -1;
 
   return 0;
 }
@@ -215,12 +226,14 @@ bigapp_launch_thread(void* arg) {
   char** argv = (char**)arg;
   app_launch_ctx_t ctx = {0};
 
-  if(sceUserServiceGetForegroundUser(&ctx.user_id)) {
+  int user_rc = sceUserServiceGetForegroundUser(&ctx.user_id);
+  if(user_rc) {
+    ps5log("sceUserServiceGetForegroundUser rc=0x%x", user_rc);
     return 0;
   }
 
-  int rc = sceSystemServiceLaunchApp("PS5W00002", argv, &ctx);
-  ps5log("sceSystemServiceLaunchApp title=PS5W00002 user=%u rc=0x%x",
+  int rc = sceSystemServiceLaunchApp("PSWL00002", argv, &ctx);
+  ps5log("sceSystemServiceLaunchApp title=PSWL00002 user=%u rc=0x%x",
          ctx.user_id, rc);
 
   return 0;
@@ -435,15 +448,21 @@ hbldr_launch(const char*cwd, const char* path, int stdio, char** argv,
     return -1;
   }
 
-  if(fakeapp_create_if_missing()) {
-    if(remount_system_ex()) {
-      perror("remount_system_ex");
-      return -1;
-    }
-    if(fakeapp_create_if_missing()) {
-      perror("fakeapp_create_if_missing");
-      return -1;
-    }
+  struct statfs mount_info;
+  if(statfs("/system_ex", &mount_info)) return -1;
+  int was_readonly = (mount_info.f_flags & MNT_RDONLY) != 0;
+  if(was_readonly && remount_system_ex(0)) {
+    perror("remount_system_ex writable");
+    return -1;
+  }
+  int created = fakeapp_create_if_missing();
+  if(was_readonly && remount_system_ex(MNT_RDONLY)) {
+    perror("restoring system_ex readonly");
+    return -1;
+  }
+  if(created) {
+    perror("fakeapp_create_if_missing");
+    return -1;
   }
 
 
@@ -470,4 +489,29 @@ hbldr_launch(const char*cwd, const char* path, int stdio, char** argv,
   free(elf);
 
   return pid;
+}
+
+int hbldr_remove(void) {
+  struct stat st;
+  if(stat(FAKE_PATH, &st)) return errno == ENOENT ? 0 : -1;
+  struct statfs mount_info;
+  if(statfs("/system_ex", &mount_info)) return -1;
+  int was_readonly = (mount_info.f_flags & MNT_RDONLY) != 0;
+  ps5log("remove BigApp mount flags=0x%lx readonly=%d", (unsigned long)mount_info.f_flags, was_readonly);
+  if(was_readonly && remount_system_ex(0)) {
+    perror("remove BigApp remount writable");
+    return -1;
+  }
+  int rc = 0;
+  const char *files[] = {FAKE_PATH "/eboot.bin", FAKE_PATH "/sce_sys/param.json"};
+  for(size_t i=0; i<sizeof(files)/sizeof(files[0]); i++) {
+    int result = unlink(files[i]);
+    ps5log("remove %s result=%d errno=%d", files[i], result, errno);
+    if(result && errno != ENOENT) rc = -1;
+  }
+  if(rmdir(FAKE_PATH "/sce_sys") && errno != ENOENT) { perror("remove BigApp sce_sys"); rc = -1; }
+  if(rmdir(FAKE_PATH) && errno != ENOENT) { perror("remove BigApp root"); rc = -1; }
+  if(was_readonly && remount_system_ex(MNT_RDONLY)) { perror("remove BigApp restore readonly"); rc = -1; }
+  ps5log("remove BigApp directory rc=%d errno=%d", rc, errno);
+  return rc;
 }

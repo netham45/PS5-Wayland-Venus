@@ -1,0 +1,238 @@
+Rationale: PS5 has no open_memstream/funopen; preserve complete DRM modifier names with the real growable buffer helper.
+--- a/xf86drm.c
++++ b/xf86drm.c
+@@ -32,6 +32,7 @@
+  */
+ 
+ #include <stdio.h>
++#include <ps5wl_log_buffer.h>
+ #include <stdlib.h>
+ #include <stdbool.h>
+ #include <unistd.h>
+@@ -203,7 +204,7 @@
+ };
+ 
+ static bool
+-drmGetAfbcFormatModifierNameFromArm(uint64_t modifier, FILE *fp)
++drmGetAfbcFormatModifierNameFromArm(uint64_t modifier, struct ps5wl_log_buffer *fp)
+ {
+     uint64_t mode_value = modifier & AFBC_FORMAT_MOD_MODE_VALUE_MASK;
+     uint64_t block_size = mode_value & AFBC_FORMAT_MOD_BLOCK_SIZE_MASK;
+@@ -232,17 +233,17 @@
+         return false;
+     }
+ 
+-    fprintf(fp, "BLOCK_SIZE=%s,", block);
++    ps5wl_log_append(fp, "BLOCK_SIZE=%s,", block);
+ 
+     /* add mode */
+     for (unsigned int i = 0; i < ARRAY_SIZE(arm_mode_value_table); i++) {
+         if (arm_mode_value_table[i].modifier & mode_value) {
+             mode = arm_mode_value_table[i].modifier_name;
+             if (!did_print_mode) {
+-                fprintf(fp, "MODE=%s", mode);
++                ps5wl_log_append(fp, "MODE=%s", mode);
+                 did_print_mode = true;
+             } else {
+-                fprintf(fp, "|%s", mode);
++                ps5wl_log_append(fp, "|%s", mode);
+             }
+         }
+     }
+@@ -251,7 +252,7 @@
+ }
+ 
+ static bool
+-drmGetAfrcFormatModifierNameFromArm(uint64_t modifier, FILE *fp)
++drmGetAfrcFormatModifierNameFromArm(uint64_t modifier, struct ps5wl_log_buffer *fp)
+ {
+     bool scan_layout;
+     for (unsigned int i = 0; i < 2; ++i) {
+@@ -279,18 +280,18 @@
+         }
+ 
+         if (i == 0) {
+-            fprintf(fp, "P0=%s,", coding_unit_size);
++            ps5wl_log_append(fp, "P0=%s,", coding_unit_size);
+         } else {
+-            fprintf(fp, "P12=%s,", coding_unit_size);
++            ps5wl_log_append(fp, "P12=%s,", coding_unit_size);
+         }
+     }
+ 
+     scan_layout =
+         (modifier & AFRC_FORMAT_MOD_LAYOUT_SCAN) == AFRC_FORMAT_MOD_LAYOUT_SCAN;
+     if (scan_layout) {
+-        fprintf(fp, "SCAN");
++        ps5wl_log_append(fp, "SCAN");
+     } else {
+-        fprintf(fp, "ROT");
++        ps5wl_log_append(fp, "ROT");
+     }
+     return true;
+ }
+@@ -300,14 +301,9 @@
+ {
+     uint64_t type = (modifier >> 52) & 0xf;
+ 
+-    FILE *fp;
+-    size_t size = 0;
+-    char *modifier_name = NULL;
++    struct ps5wl_log_buffer storage = {0};
++    struct ps5wl_log_buffer *fp = &storage;
+     bool result = false;
+-
+-    fp = open_memstream(&modifier_name, &size);
+-    if (!fp)
+-        return NULL;
+ 
+     switch (type) {
+     case DRM_FORMAT_MOD_ARM_TYPE_AFBC:
+@@ -323,13 +319,12 @@
+         break;
+     }
+ 
+-    fclose(fp);
+-    if (!result) {
+-        free(modifier_name);
++    if (!result || fp->failed) {
++        free(fp->data);
+         return NULL;
+     }
+ 
+-    return modifier_name;
++    return fp->data;
+ }
+ 
+ static char *
+@@ -406,43 +401,37 @@
+         /* other values are unused */
+     };
+     uint64_t tile_version = AMD_FMT_MOD_GET(TILE_VERSION, modifier);
+-    FILE *fp;
+-    char *mod_amd = NULL;
+-    size_t size = 0;
+-
+-    fp = open_memstream(&mod_amd, &size);
+-    if (!fp)
+-        return NULL;
++    struct ps5wl_log_buffer storage = {0};
++    struct ps5wl_log_buffer *fp = &storage;
+ 
+     switch (tile_version) {
+     case AMD_FMT_MOD_TILE_VER_GFX9:
+-        fprintf(fp, "GFX9");
++        ps5wl_log_append(fp, "GFX9");
+         break;
+     case AMD_FMT_MOD_TILE_VER_GFX10:
+-        fprintf(fp, "GFX10");
++        ps5wl_log_append(fp, "GFX10");
+         break;
+     case AMD_FMT_MOD_TILE_VER_GFX10_RBPLUS:
+-        fprintf(fp, "GFX10_RBPLUS");
++        ps5wl_log_append(fp, "GFX10_RBPLUS");
+         break;
+     case AMD_FMT_MOD_TILE_VER_GFX11:
+-        fprintf(fp, "GFX11");
++        ps5wl_log_append(fp, "GFX11");
+         break;
+     case AMD_FMT_MOD_TILE_VER_GFX12:
+-        fprintf(fp, "GFX12");
++        ps5wl_log_append(fp, "GFX12");
+         break;
+     default:
+-        fclose(fp);
+-        free(mod_amd);
++        free(fp->data);
+         return NULL;
+     }
+ 
+     if (tile_version >= AMD_FMT_MOD_TILE_VER_GFX12) {
+         unsigned tile = AMD_FMT_MOD_GET(TILE, modifier);
+ 
+-        fprintf(fp, ",%s", gfx12_tile_strings[tile]);
++        ps5wl_log_append(fp, ",%s", gfx12_tile_strings[tile]);
+ 
+         if (AMD_FMT_MOD_GET(DCC, modifier)) {
+-            fprintf(fp, ",DCC,DCC_MAX_COMPRESSED_BLOCK=%uB",
++            ps5wl_log_append(fp, ",DCC,DCC_MAX_COMPRESSED_BLOCK=%uB",
+                     64 << AMD_FMT_MOD_GET(DCC_MAX_COMPRESSED_BLOCK, modifier));
+ 
+             /* Other DCC fields are unused by GFX12. */
+@@ -450,16 +439,16 @@
+     } else {
+         unsigned tile = AMD_FMT_MOD_GET(TILE, modifier);
+ 
+-        fprintf(fp, ",%s", gfx9_gfx11_tile_strings[tile]);
++        ps5wl_log_append(fp, ",%s", gfx9_gfx11_tile_strings[tile]);
+ 
+         /* All *_T and *_X modes are affected by chip-specific fields. */
+         if (tile >= 16) {
+-            fprintf(fp, ",PIPE_XOR_BITS=%u",
++            ps5wl_log_append(fp, ",PIPE_XOR_BITS=%u",
+                     (unsigned)AMD_FMT_MOD_GET(PIPE_XOR_BITS, modifier));
+ 
+             switch (tile_version) {
+             case AMD_FMT_MOD_TILE_VER_GFX9:
+-                fprintf(fp, ",BANK_XOR_BITS=%u",
++                ps5wl_log_append(fp, ",BANK_XOR_BITS=%u",
+                         (unsigned)AMD_FMT_MOD_GET(BANK_XOR_BITS, modifier));
+                 break;
+ 
+@@ -472,7 +461,7 @@
+                 /* This also determines the DCC layout, but DCC is only legal
+                  * with tile=27 and tile=31 (*_R_X modes).
+                  */
+-                fprintf(fp, ",PACKERS=%u",
++                ps5wl_log_append(fp, ",PACKERS=%u",
+                         (unsigned)AMD_FMT_MOD_GET(PACKERS, modifier));
+                 break;
+             }
+@@ -485,34 +474,37 @@
+                 /* These two only determine the layout of
+                  * the non-displayable DCC plane.
+                  */
+-                fprintf(fp, ",RB=%u",
++                ps5wl_log_append(fp, ",RB=%u",
+                         (unsigned)AMD_FMT_MOD_GET(RB, modifier));
+-                fprintf(fp, ",PIPE=%u",
++                ps5wl_log_append(fp, ",PIPE=%u",
+                         (unsigned)AMD_FMT_MOD_GET(PIPE, modifier));
+             }
+ 
+-            fprintf(fp, ",DCC,DCC_MAX_COMPRESSED_BLOCK=%uB",
++            ps5wl_log_append(fp, ",DCC,DCC_MAX_COMPRESSED_BLOCK=%uB",
+                     64 << AMD_FMT_MOD_GET(DCC_MAX_COMPRESSED_BLOCK, modifier));
+ 
+             if (AMD_FMT_MOD_GET(DCC_INDEPENDENT_64B, modifier))
+-                fprintf(fp, ",DCC_INDEPENDENT_64B");
++                ps5wl_log_append(fp, ",DCC_INDEPENDENT_64B");
+ 
+             if (AMD_FMT_MOD_GET(DCC_INDEPENDENT_128B, modifier))
+-                fprintf(fp, ",DCC_INDEPENDENT_128B");
++                ps5wl_log_append(fp, ",DCC_INDEPENDENT_128B");
+ 
+             if (AMD_FMT_MOD_GET(DCC_CONSTANT_ENCODE, modifier))
+-                fprintf(fp, ",DCC_CONSTANT_ENCODE");
++                ps5wl_log_append(fp, ",DCC_CONSTANT_ENCODE");
+ 
+             if (AMD_FMT_MOD_GET(DCC_PIPE_ALIGN, modifier))
+-                fprintf(fp, ",DCC_PIPE_ALIGN");
++                ps5wl_log_append(fp, ",DCC_PIPE_ALIGN");
+ 
+             if (AMD_FMT_MOD_GET(DCC_RETILE, modifier))
+-                fprintf(fp, ",DCC_RETILE");
++                ps5wl_log_append(fp, ",DCC_RETILE");
+         }
+     }
+ 
+-    fclose(fp);
+-    return mod_amd;
++    if (fp->failed) {
++        free(fp->data);
++        return NULL;
++    }
++    return fp->data;
+ }
+ 
+ static char *

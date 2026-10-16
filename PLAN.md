@@ -11,7 +11,8 @@ Every claim about the console is either cited evidence or marked
 ## Decisions
 
 - **Process model:** the compositor is an elfldr payload (own process, can spawn,
-  AF_UNIX, dlopen). Observed on the dev console (2026-10-16, hello payload):
+  AF_UNIX, dlopen). Observed on the dev console (2026-10-16, hello payload,
+  firmware 10.60 per `kernel_get_fw_version()=0x10600006`):
   uid 1 (not root), parent elfldr, AF_UNIX bind on `/system_tmp` OK,
   `shm_open(SHM_ANON)`+`mmap(MAP_SHARED)` OK, page size 16384; jail status
   unprobed. A home-screen entry triggers it (pldmgr-style
