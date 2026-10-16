@@ -46,9 +46,10 @@ tools/ps5ctl run build/ps5/vkcube/ps5wl-vkcube.elf
 tools/ps5ctl logs --port 9590
 ```
 
-The payload defaults to 300 frames, logs the first and every 60th successful
-present, releases its Vulkan/Wayland objects, and lingers for 30 seconds for
-log pulls. It shares `/data/ps5wl/libvulkan.so.1` with the smoke; never
+The payload runs until its window closes or Escape is pressed, and logs the
+first and every 60th successful present. On normal exit it releases its
+Vulkan/Wayland objects and lingers for 30 seconds for log pulls. It shares
+`/data/ps5wl/libvulkan.so.1` with the smoke; never
 run two differently built driver payloads concurrently. The compositor uses
 pixman and owns VideoOut; the client builds only the Wayland WSI platform.
 Compare client presents with the compositor's surface commit/output frame
@@ -70,5 +71,15 @@ and `RESULT PASS` using the same llvmpipe driver. This checks optimal-image
 clear, image-to-buffer copy, fence completion, and CPU-visible data; it does
 not establish PS5 hardware execution.
 
-Console GPU/cube acceptance is not yet established by these host results.
+Observed console GPU acceptance (log port 9591, payload pids 137 and 143):
+`device=PlayStation 5 GPU (RADV NAVI21) vendor=1002 device=0000 api=1.4.354`;
+all 16,384 image-clear readback words matched `0x1a2b3c4d`, with
+`mismatches=0` and `RESULT PASS` in both runs. These payloads created no
+surface and did not link or open VideoOut. The second run also exercised
+atomic driver-file replacement. Console Wayland cube acceptance remains unproven.
+
+The embedded 21,200,784-byte driver was extracted successfully under
+`/data/ps5wl`. A prior `/system_tmp` extraction failed with `ENOSPC` after
+262,144 bytes; its truncated file was removed. Use `/data`, not the small
+temporary filesystem, for the shared driver.
 

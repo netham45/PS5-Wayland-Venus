@@ -40,9 +40,11 @@ static int capture_ready(int fd, uint32_t mask, void *data) {
  fcntl(client, F_SETFD, FD_CLOEXEC);
  int flags = fcntl(client, F_GETFL);
  fcntl(client, F_SETFL, flags & ~O_NONBLOCK);
- struct timeval timeout = { .tv_sec = 2 }; int yes = 1;
+ struct timeval timeout = { .tv_sec = 2 };
  setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
- setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#ifdef SO_NOSIGPIPE
+ int yes = 1; setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes));
+#endif
  static const unsigned char signature[] = {137,80,78,71,13,10,26,10};
  unsigned char ihdr[13] = {0}; be32(ihdr, capture->width); be32(ihdr + 4, capture->height); ihdr[8] = 8; ihdr[9] = 2;
  int rc = send_all(client, signature, sizeof(signature)) || chunk(client, "IHDR", ihdr, sizeof(ihdr));
@@ -78,7 +80,10 @@ struct ps5_capture *ps5_capture_create(struct wl_event_loop *loop,
  fcntl(capture->fd, F_SETFD, FD_CLOEXEC);
  int flags = fcntl(capture->fd, F_GETFL); fcntl(capture->fd, F_SETFL, flags | O_NONBLOCK);
  int yes = 1; setsockopt(capture->fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
- struct sockaddr_in address = { .sin_len = sizeof(address), .sin_family = AF_INET, .sin_port = htons(9531), .sin_addr.s_addr = htonl(INADDR_ANY) };
+ struct sockaddr_in address = { .sin_family = AF_INET, .sin_port = htons(9531), .sin_addr.s_addr = htonl(INADDR_ANY) };
+#ifdef __FreeBSD__
+ address.sin_len = sizeof(address);
+#endif
  if (bind(capture->fd, (struct sockaddr *)&address, sizeof(address)) || listen(capture->fd, 2)) { close(capture->fd); free(capture); return NULL; }
  capture->width = width; capture->height = height; capture->pixel = pixel; capture->data = data;
  capture->source = wl_event_loop_add_fd(loop, capture->fd, WL_EVENT_READABLE, capture_ready, capture);

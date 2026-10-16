@@ -47,19 +47,7 @@
  
      if (demo->wayland_display == NULL) {
          return "Cannot connect to wayland.";
-@@ -4700,7 +4701,11 @@
- 
-     memset(demo, 0, sizeof(*demo));
-     demo->presentMode = VK_PRESENT_MODE_FIFO_KHR;
-+#ifdef PS5WL_PS5
-+    demo->frameCount = 300;
-+#else
-     demo->frameCount = INT32_MAX;
-+#endif
-     /* Autodetect suitable / best GPU by default */
-     demo->gpu_number = -1;
-     demo->width = 500;
-@@ -5101,6 +5106,11 @@
+@@ -5101,6 +5102,11 @@
  #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
  int main(int argc, char **argv) {
      struct demo demo;
@@ -71,7 +59,7 @@
  
      demo_init(&demo, argc, argv);
      switch (demo.wsi_platform) {
-@@ -5193,6 +5203,8 @@
+@@ -5193,6 +5199,8 @@
      }
  
      demo_cleanup(&demo);

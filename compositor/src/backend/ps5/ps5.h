@@ -5,13 +5,16 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
-#include <sys/event.h>
+struct kevent;
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 struct ps5_video_buffer { void *data; uint64_t reserved[3]; };
 struct ps5_video_attr { uint8_t reserved[80]; };
 int sceSystemServiceHideSplashScreen(void);
-int sceKernelAllocateMainDirectMemory(size_t, size_t, int, intptr_t *);
+/* Full-pool allocator/query ABI: Mesa PS5 ps5_sce.h:46-53. */
+int64_t sceKernelGetDirectMemorySize(void);
+int sceKernelAvailableDirectMemorySize(int64_t, int64_t, size_t, int64_t *, size_t *);
+int sceKernelAllocateDirectMemory(int64_t, int64_t, size_t, size_t, int, int64_t *);
 int sceKernelMapDirectMemory(void **, size_t, int, int, intptr_t, size_t);
 int sceKernelReleaseDirectMemory(intptr_t, size_t);
 int sceKernelMunmap(void *, size_t);

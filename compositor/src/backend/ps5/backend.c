@@ -4,6 +4,7 @@
 #include "ps5.h"
 #include "ps5log.h"
 #include <drm_fourcc.h>
+#include <sys/event.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -18,7 +19,10 @@
 #include <wlr/types/wlr_output_layer.h>
 #define WIDTH 1920
 #define HEIGHT 1080
-#define MEMORY_SIZE 0x4000000
+/* SDL Tilemap_BufferSize: last 128-row band + final 512x128 tile.
+ * Round each real 1080p scanout to 2 MiB; no unused 64 MiB allocation. */
+#define BUFFER_BYTES (((((HEIGHT - 1) / 128) * (128 * WIDTH) + ((WIDTH - 1) / 512) * 65536 + 65536) * 4 + 0x1fffff) & ~0x1fffff)
+#define MEMORY_SIZE (2 * BUFFER_BYTES)
 struct ps5_backend {
  struct wlr_backend base;
  struct wlr_output output;
@@ -215,6 +219,7 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
   * flip rate0 and RegisterBuffers2 attribute0x8000000022000000. */
  struct ps5_backend *b = calloc(1, sizeof(*b));
  if (!b) return NULL;
+ atomic_init(&b->stopping, false);
  b->display = display; b->loop = wl_display_get_event_loop(display);
  b->video = -1; b->pipefd[0] = b->pipefd[1] = -1;
  wlr_backend_init(&b->base, &backend_impl);
@@ -232,16 +237,23 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
  b->video = sceVideoOutOpen(0xff, 0, 0, NULL);
  ps5log("VideoOut SYSTEM open=%#x", b->video);
  if (b->video < 0) goto fail;
- int rc = sceKernelAllocateMainDirectMemory(MEMORY_SIZE, 0x20000, 3, &b->physical);
- ps5log("VideoOut direct allocate rc=%#x physical=%#lx", rc, (unsigned long)b->physical);
+ int64_t pool = sceKernelGetDirectMemorySize(), available_start = -1;
+ size_t available = 0;
+ int rc = sceKernelAvailableDirectMemorySize(0, pool, 0x200000, &available_start, &available);
+ ps5log("direct pool=%lld available-query rc=%#x start=%#llx bytes=%zu need=%u",
+  (long long)pool, rc, (unsigned long long)available_start, available, MEMORY_SIZE);
+ /* Full pool rather than MainDirectMemory's application-budget subrange,
+  * as in prospero-win pw_videoout_ps5.c and Mesa RADV's PS5 winsys. */
+ rc = sceKernelAllocateDirectMemory(0, pool, MEMORY_SIZE, 0x200000, 3, &b->physical);
+ ps5log("VideoOut direct allocate rc=%#x physical=%#lx bytes=%u", rc, (unsigned long)b->physical, MEMORY_SIZE);
  if (rc) goto fail;
  b->allocated = true;
- rc = sceKernelMapDirectMemory(&b->mapping, MEMORY_SIZE, 0x33, 0, b->physical, 0x20000);
+ rc = sceKernelMapDirectMemory(&b->mapping, MEMORY_SIZE, 0x33, 0, b->physical, 0x200000);
  ps5log("VideoOut direct map rc=%#x address=%p", rc, b->mapping);
  if (rc) goto fail;
  memset(b->mapping, 0, MEMORY_SIZE);
  b->buffers[0].data = b->mapping;
- b->buffers[1].data = (char *)b->mapping + MEMORY_SIZE / 2;
+ b->buffers[1].data = (char *)b->mapping + BUFFER_BYTES;
  rc = sceKernelCreateEqueue(&b->queue, "ps5wl flips");
  ps5log("CreateEqueue rc=%#x queue=%p", rc, (void *)b->queue);
  if (rc) goto fail;

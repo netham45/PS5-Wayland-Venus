@@ -42,9 +42,10 @@ behavior. Shm allocation failure is returned, not asserted or presented.
 The PS5 driver follows pacbrew's shared `libvulkan.so.1` model and exports
 Vulkan entrypoints itself; no Vulkan loader is needed. Each payload embeds
 the driver and extracts it to `/data/ps5wl/libvulkan.so.1` before the
-SDK rtld opens it. This keeps deployment a single ELF while retaining the
-recipe's shared-library ABI. Both clients must be built from the same tree;
-do not replace the driver while another Vulkan client is running.
+SDK rtld opens it. A per-process temporary file is atomically renamed over
+the installed path, so another running client keeps its mapped inode intact.
+This keeps deployment a single ELF while retaining the recipe's shared-library
+ABI. Concurrent Vulkan clients must be built from the same tree.
 `0002-wayland-without-videoout.patch` disables pacbrew's otherwise
 unconditional VideoOut WSI when Wayland is selected and removes its system
 module dependency. The driver and payloads do not link SceVideoOut.

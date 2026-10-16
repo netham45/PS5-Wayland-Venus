@@ -21,9 +21,12 @@ int ps5wl_vulkan_install(void) {
         ps5log("RADV mkdir path=%s errno=%d %s", directory, errno, strerror(errno));
         return -1;
     }
-    FILE *file = fopen(path, "wb");
+    /* Never truncate an inode another Vulkan client may still have mapped. */
+    char temporary[128];
+    snprintf(temporary, sizeof(temporary), "%s.tmp.%d", path, getpid());
+    FILE *file = fopen(temporary, "wb");
     if (!file) {
-        ps5log("RADV fopen path=%s errno=%d %s", path, errno, strerror(errno));
+        ps5log("RADV fopen path=%s errno=%d %s", temporary, errno, strerror(errno));
         return -1;
     }
     size_t length = (size_t)(_binary_radv_so_end - _binary_radv_so_start);
@@ -32,7 +35,12 @@ int ps5wl_vulkan_install(void) {
     if (written != length || rc) {
         ps5log("RADV write bytes=%zu expected=%zu close=%d errno=%d %s",
             written, length, rc, errno, strerror(errno));
-        unlink(path);
+        unlink(temporary);
+        return -1;
+    }
+    if (rename(temporary, path)) {
+        ps5log("RADV rename path=%s errno=%d %s", path, errno, strerror(errno));
+        unlink(temporary);
         return -1;
     }
     ps5log("RADV library extracted bytes=%zu path=%s", length, path);

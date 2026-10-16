@@ -234,6 +234,62 @@ three emulated descriptor tests:
 [16659462 ms] probe-events-shim: events probe complete
 ```
 
+### Descriptor duplication: compositor initialization regression
+
+The compositor subsequently exposed `wl_display_create()` returning NULL
+with errno 45. An additional real-console probe (PID 140) compared the
+original emulated eventfd against both duplication commands.
+
+**Verdict:** `F_DUPFD_CLOEXEC` is unsupported (`EOPNOTSUPP`, not `EINVAL`).
+`F_DUPFD` succeeds and its alias can be watched with epoll, but the alias
+cannot be read through epoll-shim because duplication does not copy its
+userspace descriptor metadata. The original descriptor still works.
+
+```text
+[16992435 ms] probe-events-shim: eventfd alias mode=original original=10 alias=10 dup_errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=0 epoll_ctl ADD rc=0 errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=0 write_original=8 errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=0 epoll_wait rc=1 errno=0 events=1
+[16992435 ms] probe-events-shim: eventfd alias mode=0 read_alias=8 errno=0 value=11
+[16992435 ms] probe-events-shim: eventfd alias mode=F_DUPFD original=10 alias=11 dup_errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=1 epoll_ctl ADD rc=0 errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=1 write_original=8 errno=0
+[16992435 ms] probe-events-shim: eventfd alias mode=1 epoll_wait rc=1 errno=0 events=1
+[16992435 ms] probe-events-shim: eventfd alias mode=1 read_alias=-1 errno=45 value=0
+[16992435 ms] probe-events-shim: eventfd alias mode=F_DUPFD_CLOEXEC original=10 alias=-1 dup_errno=45
+```
+
+Ps5Deps confirmed that Wayland watches the duplicate but invokes its callback
+with the original fd. Therefore this tested alias-readiness behavior suffices
+for Wayland; supporting arbitrary reads through shim aliases would be extra
+scope. Ps5Deps owns the measured `EOPNOTSUPP` fallback to checked
+`F_DUPFD` plus `F_SETFD(FD_CLOEXEC)`. The descriptor tests remain as a
+regression probe, with the general alias-read limitation explicitly recorded.
+
+A follow-on control run (PID 141) proves the unsupported command is not
+specific to emulated eventfds. It also verifies explicit CLOEXEC setting:
+
+```text
+[17044529 ms] probe-events-shim: eventfd alias mode=1 CLOEXEC before=0 setrc=0 errno=0 after=1
+[17044529 ms] probe-events-shim: eventfd alias mode=F_DUPFD_CLOEXEC original=10 alias=-1 dup_errno=45
+[17044529 ms] probe-events-shim: socketpair alias mode=0 CLOEXEC before=0 setrc=0 errno=0 after=1
+[17044529 ms] probe-events-shim: socketpair alias mode=0 epoll_ctl ADD rc=0 errno=0
+[17044529 ms] probe-events-shim: socketpair alias mode=0 epoll_wait rc=1 errno=0 events=1
+[17044529 ms] probe-events-shim: socketpair alias mode=0 read_alias=1 errno=0 byte=D
+[17044529 ms] probe-events-shim: socketpair alias mode=1 original=10 alias=12 dup_errno=0
+[17044529 ms] probe-events-shim: socketpair alias mode=1 CLOEXEC before=0 setrc=0 errno=0 after=1
+[17044529 ms] probe-events-shim: socketpair alias mode=1 epoll_ctl ADD rc=0 errno=0
+[17044529 ms] probe-events-shim: socketpair alias mode=1 write_peer=1 errno=0
+[17044529 ms] probe-events-shim: socketpair alias mode=1 epoll_wait rc=1 errno=0 events=1
+[17044529 ms] probe-events-shim: socketpair alias mode=1 read_alias=1 errno=0 byte=D
+[17044529 ms] probe-events-shim: socketpair alias mode=2 original=10 alias=-1 dup_errno=45
+[17044529 ms] probe-events-shim: events probe complete
+```
+
+Both control runs built successfully inside `env/run`, used the same
+`ps5wl-probe-events-shim.elf` deployment and port 9548, completed their
+bounded log linger and reached EOF. No probe payload remains running.
+
 ## 4–5. VideoOut and input
 
 **Verdict: removed from probe scope by coordinator directive.** Shipping SDL

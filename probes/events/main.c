@@ -73,6 +73,43 @@ int main(void) {
         ps5log("shim kind=%d signal rc=%d errno=%d",kind,r,r<0?errno:0);r=epoll_wait(ep,&event,1,2000);ps5log("shim kind=%d epoll_wait rc=%d errno=%d events=%x",kind,r,r<0?errno:0,event.events);
         if(r==1){unsigned char b[128]={0};ssize_t n=read(fd,b,kind==2?sizeof(b):8);uint64_t value=0;memcpy(&value,b,8);ps5log("shim kind=%d read=%zd first_u64=%lu",kind,n,value);}close(fd);
     }
+    /* Reproduce Wayland wl_os_dupfd_cloexec -> epoll_ctl on a shim eventfd.
+     * epoll_shim_ctx.c:802-809 delegates duplication to real fcntl. */
+    for(int mode=0;mode<3;mode++){
+        int original=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK);int alias=original;
+        errno=0;
+        if(mode)alias=fcntl(original,mode==1?F_DUPFD:F_DUPFD_CLOEXEC,0);
+        ps5log("eventfd alias mode=%s original=%d alias=%d dup_errno=%d",mode==0?"original":mode==1?"F_DUPFD":"F_DUPFD_CLOEXEC",original,alias,errno);
+        if(alias>=0){
+            int before=fcntl(alias,F_GETFD,0);errno=0;int setrc=fcntl(alias,F_SETFD,before|FD_CLOEXEC);int seterr=errno;int afterflags=fcntl(alias,F_GETFD,0);
+            ps5log("eventfd alias mode=%d CLOEXEC before=%d setrc=%d errno=%d after=%d",mode,before,setrc,seterr,afterflags);
+            struct epoll_event ev={.events=EPOLLIN,.data.u32=100+mode};errno=0;r=epoll_ctl(ep,EPOLL_CTL_ADD,alias,&ev);
+            ps5log("eventfd alias mode=%d epoll_ctl ADD rc=%d errno=%d",mode,r,errno);
+            uint64_t value=11;errno=0;ssize_t n=write(original,&value,8);ps5log("eventfd alias mode=%d write_original=%zd errno=%d",mode,n,errno);
+            errno=0;r=epoll_wait(ep,&ev,1,100);ps5log("eventfd alias mode=%d epoll_wait rc=%d errno=%d events=%x",mode,r,errno,ev.events);
+            value=0;errno=0;n=read(alias,&value,8);ps5log("eventfd alias mode=%d read_alias=%zd errno=%d value=%lu",mode,n,errno,value);
+            if(alias!=original)close(alias);
+        }
+        close(original);
+    }
+    for(int mode=0;mode<3;mode++){
+        int pair[2];errno=0;int pairrc=socketpair(AF_UNIX,SOCK_STREAM,0,pair);
+        ps5log("socketpair alias mode=%d create rc=%d errno=%d",mode,pairrc,errno);
+        if(pairrc<0)continue;
+        int alias=pair[0];errno=0;if(mode)alias=fcntl(pair[0],mode==1?F_DUPFD:F_DUPFD_CLOEXEC,0);
+        ps5log("socketpair alias mode=%d original=%d alias=%d dup_errno=%d",mode,pair[0],alias,errno);
+        if(alias>=0){
+            int before=fcntl(alias,F_GETFD,0);errno=0;int setrc=fcntl(alias,F_SETFD,before|FD_CLOEXEC);int seterr=errno;int afterflags=fcntl(alias,F_GETFD,0);
+            ps5log("socketpair alias mode=%d CLOEXEC before=%d setrc=%d errno=%d after=%d",mode,before,setrc,seterr,afterflags);
+            struct epoll_event ev={.events=EPOLLIN,.data.u32=200+mode};errno=0;r=epoll_ctl(ep,EPOLL_CTL_ADD,alias,&ev);
+            ps5log("socketpair alias mode=%d epoll_ctl ADD rc=%d errno=%d",mode,r,errno);
+            errno=0;ssize_t n=write(pair[1],"D",1);ps5log("socketpair alias mode=%d write_peer=%zd errno=%d",mode,n,errno);
+            errno=0;r=epoll_wait(ep,&ev,1,100);ps5log("socketpair alias mode=%d epoll_wait rc=%d errno=%d events=%x",mode,r,errno,ev.events);
+            if(r>0){char byte=0;errno=0;n=read(alias,&byte,1);ps5log("socketpair alias mode=%d read_alias=%zd errno=%d byte=%c",mode,n,errno,byte);}
+            if(alias!=pair[0])close(alias);
+        }
+        close(pair[0]);close(pair[1]);
+    }
     sigset_t temporary,after;sigemptyset(&temporary);struct epoll_event none={0};
     errno=0;r=epoll_pwait(ep,&none,1,0,&temporary);int saved=errno;
     int maskrc=pthread_sigmask(SIG_SETMASK,NULL,&after);

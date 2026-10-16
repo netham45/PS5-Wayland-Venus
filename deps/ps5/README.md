@@ -63,6 +63,11 @@ or compatibility copy is retained.
 - `wayland/0003-prospero-set-socket-cloexec-explicitly.patch`: console probes
   observed successful `SOCK_CLOEXEC` socket creation without the close-on-exec
   flag. Always use Wayland's checked `fcntl(F_SETFD)` fallback on PS5.
+- `wayland/0004-unsupported-atomic-dup-cloexec-fallback.patch`: console
+  `F_DUPFD_CLOEXEC` fails with `EOPNOTSUPP`; use the existing checked
+  `F_DUPFD` plus `F_SETFD` path for that unsupported atomic operation.
+  Wayland polls the duplicate but dispatches callbacks with the original fd.
+  General reads through aliases of shim-created eventfds remain unsupported.
 - `libdrm/0001-growable-modifier-name-buffer.patch`: preserve complete ARM/AMD
   modifier names with the same checked growable buffer instead of unavailable
   `open_memstream`.

@@ -1,0 +1,12 @@
+Rationale: PS5 console probes show F_DUPFD_CLOEXEC fails EOPNOTSUPP while F_DUPFD works. Use the existing checked FD_CLOEXEC fallback for an unsupported atomic operation.
+--- a/src/wayland-os.c
++++ b/src/wayland-os.c
+@@ -142,7 +142,7 @@
+ 	newfd = wl_fcntl(fd, F_DUPFD_CLOEXEC, minfd);
+ 	if (newfd >= 0)
+ 		return newfd;
+-	if (errno != EINVAL)
++	if (errno != EINVAL && errno != EOPNOTSUPP)
+ 		return -1;
+ 
+ 	newfd = wl_fcntl(fd, F_DUPFD, minfd);
