@@ -1,0 +1,8 @@
+#include "cap.h"
+#include <sys/resource.h>
+#include <sys/sysctl.h>
+static volatile int release;static void *thread(void *p){(void)p;while(!__atomic_load_n(&release,__ATOMIC_ACQUIRE))usleep(10000);return 0;}
+int main(void){begin("lklcap-limits",9608);int resources[]={RLIMIT_AS,RLIMIT_DATA,RLIMIT_NPROC,RLIMIT_NOFILE};const char *names[]={"AS","DATA","NPROC","NOFILE"};for(int i=0;i<4;i++){struct rlimit r;int rc=getrlimit(resources[i],&r);CHECK("getrlimit",rc==0,"resource=%s rc=%d errno=%d soft=%llu hard=%llu",names[i],rc,errno,(unsigned long long)r.rlim_cur,(unsigned long long)r.rlim_max);}
+    /* Do not drive the shared console into global OOM: 128 MiB hard resident cap. */
+    size_t largest=0;for(size_t size=8UL<<20;size<=128UL<<20;size*=2){void *p=mmap(0,size,3,MAP_ANON|MAP_PRIVATE,-1,0);int e=errno;if(p!=MAP_FAILED){for(size_t off=0;off<size;off+=PAGE)*((volatile char*)p+off)=0x5a;largest=size;munmap(p,size);}CHECK("anonymous_touch",p!=MAP_FAILED,"bytes=%zu map=%p errno=%d",size,p,p==MAP_FAILED?e:0);if(p==MAP_FAILED)break;}ps5log("VALUE resident_lower_bound=%zu safety_cap=134217728 absolute_limit_untested=1",largest);
+    pthread_t threads[2048];pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,65536);unsigned n;int rc=0;double end=now()+8;for(n=0;n<2048&&now()<end;n++){rc=pthread_create(&threads[n],&attr,thread,0);if(rc)break;}ps5log("VALUE thread_count=%u create_rc=%d bound=2048 time_cap_seconds=8",n,rc);CHECK("thread_creation",n>0,"created=%u failure_rc=%d",n,rc);__atomic_store_n(&release,1,__ATOMIC_RELEASE);for(unsigned j=0;j<n;j++)pthread_join(threads[j],0);pthread_attr_destroy(&attr);return finish();}

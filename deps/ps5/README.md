@@ -175,3 +175,20 @@ bidirectional coherence checks. Exact-target `F_DUP2FD_CLOEXEC` and `dup3`
 also retained identity, size and close-on-exec state and passed coherence.
 Socket/socketpair close-on-exec and nonblocking flags, open/shm_open
 close-on-exec, and received SCM_RIGHTS close-on-exec were observed set.
+
+### Console-stop evidence
+
+When the coordinator reported the console unavailable after its BigApp fork
+experiment, the dependency owner had no active console commands or pullers.
+The final exact lines held from DeployTools' last captured dependency linktest
+were:
+
+```text
+[17173120 ms] deps-linktest: creating Wayland display
+[17173220 ms] deps-linktest: wl_display_create: OK
+[17173320 ms] deps-linktest: wl_event_loop_dispatch(timeout=0): 0 errno=0
+[17173320 ms] deps-linktest: RESULT: PASS
+```
+
+These are earlier linktest results, not output from the later fork experiment.
+The separate systemic-wrapper hardware verdicts above were supplied by Probes.

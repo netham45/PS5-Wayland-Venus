@@ -1,0 +1,19 @@
+--- a/src/gallium/frontends/lavapipe/lvp_device.c
++++ b/src/gallium/frontends/lavapipe/lvp_device.c
+@@ -1532,6 +1532,16 @@
+       device->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer = true;
+ #endif
+ 
++   /* Host reproduction of PS5's lack of Vulkan external fd handles. */
++   if (debug_get_bool_option("PS5WL_NO_EXTERNAL_FD", false)) {
++      device->vk.supported_extensions.KHR_external_memory_fd = false;
++      device->vk.supported_extensions.EXT_external_memory_dma_buf = false;
++      device->vk.supported_extensions.KHR_external_fence_fd = false;
++      device->vk.supported_extensions.KHR_external_semaphore_fd = false;
++      device->vk.supported_extensions.EXT_image_drm_format_modifier = false;
++      fprintf(stderr, "ps5wl lavapipe: external memory/fence/semaphore fd extensions disabled\n");
++   }
++
+    /* SNORM blending on llvmpipe fails CTS - disable by default */
+    device->snorm_blend = debug_get_bool_option("LVP_SNORM_BLEND", false);
+ 

@@ -1,0 +1,34 @@
+--- a/src/amd/vulkan/radv_device_memory.c
++++ b/src/amd/vulkan/radv_device_memory.c
+@@ -15,6 +15,7 @@
+ #include "radv_buffer.h"
+ #include "radv_entrypoints.h"
+ #include "radv_image.h"
++#include "util/log.h"
+ 
+ #include "vk_debug_utils.h"
+ #include "vk_log.h"
+@@ -318,6 +319,23 @@
+    return VK_SUCCESS;
+ 
+ fail:
++#ifdef RADV_PS5
++   {
++      const struct radv_physical_device *pdev = radv_device_physical(device);
++      const uint32_t type = pAllocateInfo->memoryTypeIndex;
++      const uint32_t heap = pdev->memory_properties.memoryTypes[type].heapIndex;
++      uint64_t allocated = 0;
++      if (device->overallocation_disallowed) {
++         mtx_lock(&device->overallocation_mutex);
++         allocated = device->allocated_memory_size[heap];
++         mtx_unlock(&device->overallocation_mutex);
++      }
++      mesa_loge("radv/ps5: AllocateMemory result=%d bytes=%llu type=%u heap=%u heap_bytes=%llu tracked=%d allocated=%llu",
++                result, (unsigned long long)pAllocateInfo->allocationSize, type, heap,
++                (unsigned long long)pdev->memory_properties.memoryHeaps[heap].size,
++                device->overallocation_disallowed, (unsigned long long)allocated);
++   }
++#endif
+    radv_free_memory(device, pAllocator, mem);
+    radv_device_memory_emit_report(device, mem, /* is_alloc */ true, result);
+ 

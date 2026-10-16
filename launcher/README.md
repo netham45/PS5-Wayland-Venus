@@ -1,5 +1,11 @@
 # PS5 Wayland home-screen launcher
 
+**Current console hold:** the coordinator reports the console unreachable after
+the isolated BigApp fork experiment below. Do not deploy, retry console calls,
+or run managed fork/probe uploads until the coordinator authorizes recovery.
+The installed compositor target and resident130 were not modified by that
+experiment; the managed diagnostic upload names require recovery cleanup.
+
 The installer registers a **PS5 Wayland** icon (`PSWL00001`), writes the bundled
 ELF to `/data/ps5wl/bin/ps5wl-compositor.elf`, and stays resident to handle its
 loopback browser deep link. The browser is only the trigger: the launch handler
@@ -380,4 +386,40 @@ loader intentionally uses remote `SYS_socket` with plain `SOCK_DGRAM` and
 remote `SYS_dup2` for inherited standard output/error; those ptrace operations
 bypass local linker wrappers but do not request any affected flags. Do not
 mark those inherited standard descriptors close-on-exec.
+
+## Isolated BigApp fork experiment: console outage
+
+The coordinator-authorized experiment used a temporary diagnostic BigApp with
+no VideoOut. Its parent would fork one child for direct-memory queries and an
+8MiB allocation/map/release attempt, collect a fixed64-byte result, then ask
+the shell to exit. A separately compiled background driver reused existing
+`hbldr_launch` against the managed probe ELF, without replacing resident130 or
+`/data/ps5wl/bin/ps5wl-compositor.elf`.
+
+The exact final body log in `build/ps5/evidence/bigapp-fork-budget.log` is:
+
+```text
+[4432340 ms] ps5wl-fork-budget: fork BigApp parent pid=195 uid=0 euid=0 own_info_rc=0x0 own_app=0xe019 running_bigapp=0xe019
+[4432342 ms] ps5wl-fork-budget: single fork returned child=196 errno=0
+[4437342 ms] ps5wl-fork-budget: CHILD memory result missing bytes=0 expected=64
+```
+
+`bigapp-fork-driver.log` is empty. There is no captured child memory-API result,
+wait4 result, or completed `LoadExec` shutdown. The coordinator then reported
+no ping and an unreachable Payload Manager. The experiment owner reported its
+process-list and prepared cleanup-helper requests both failed with
+`Errno113 No route to host`; helper launch was not confirmed. Temporal order is
+not proof of which child operation caused the outage.
+
+All Launcher console activity is stopped; no Launcher background puller was
+running. The experiment owner restored the original `probe.c` and Makefile,
+removed its temporary local fork ELF, and reported a successful rebuild of the
+normal probe. Source ownership has returned to Launcher.
+
+Remote cleanup is **not proven** while the console is unreachable: managed
+`ps5wl-launch-probe.elf` still contains the temporary fork body, and managed
+`ps5wl-launch-fork.elf` is the temporary driver upload. Do not launch either
+managed copy after recovery until it has been restored or removed under the
+coordinator's direction. No attempt to clean these uploads or terminate195/196
+is permitted during the console hold.
 

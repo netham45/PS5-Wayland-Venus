@@ -57,5 +57,14 @@ the raw SDK compiler or add separate per-call-site flag workarounds.
 unconditional VideoOut WSI when Wayland is selected and removes its system
 module dependency. The driver and payloads do not link SceVideoOut.
 
+`0003-ps5-allocation-diagnostics.patch` reports the failed BO size, alignment,
+flags and the existing native direct-memory error string.
+`0004-ps5-allocation-heap-diagnostics.patch` reports failed allocation type,
+heap size and tracked overallocation state, including failures before any BO
+call. The client captures stderr in a per-process file and includes its tail
+in the pull log on a fatal assertion. This also captures Mesa errors when
+its `MESA_LOG_FILE` credential check would reject a separate destination;
+neither error nor assertion is suppressed.
+
 Hardware and host acceptance results belong in `clients/vkcube/README.md`;
 none are implied by this design description.

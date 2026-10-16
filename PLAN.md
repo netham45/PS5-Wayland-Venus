@@ -31,6 +31,13 @@ Every claim about the console is either cited evidence or marked
   "PlayStation 5 GPU (RADV NAVI21)", Vulkan 1.4.354, 0 mismatches, without
   VideoOut. `/system_tmp` is tiny (ENOSPC after 256 KiB writes): sockets only;
   large files go under `/data/ps5wl`.
+- **Vulkan in a separate payload does not work (2026-10-16):** elfldr starts
+  payloads with `sys_budget_set(0)` (no direct-memory budget; cf. PS5LM
+  `docs/CONSOLE.md`). With our compositor foreground, vkcube as a plain payload
+  sees the 12 GiB pool but `sceKernelAllocateDirectMemory(8306688)` fails
+  `0x80020023`, so `vkCreateSwapchainKHR` returns OUT_OF_DEVICE_MEMORY. GPU work
+  must run in the foreground app process: plan = Venus clients over vtest to a
+  GPU server inside the compositor (`gpu-server/`, under investigation).
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.

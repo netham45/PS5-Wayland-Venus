@@ -5,6 +5,9 @@
 #include <unistd.h>
 #include "cube_functions.h"
 #include "ps5log.h"
+#ifdef PS5WL_PS5
+#include "ps5_sce.h"
+#endif
 extern int ps5wl_vulkan_install(void);
 static PFN_vkCmdClearColorImage test_vkCmdClearColorImage;
 static PFN_vkCmdCopyImageToBuffer test_vkCmdCopyImageToBuffer;
@@ -25,6 +28,11 @@ int main(void) {
     int status = 1;
     ps5log_init("ps5wl-vktest", 9591);
     ps5log("starting RADV GPU smoke pid=%d (no surface, no VideoOut)", getpid());
+#ifdef PS5WL_PS5
+    const char *vram_override = getenv("override_vram_size");
+    ps5log("direct memory pool bytes=%lld override_vram_size=%s",
+        (long long)sceKernelGetDirectMemorySize(), vram_override ? vram_override : "(unset)");
+#endif
     if (ps5wl_vulkan_install() || load_vulkan_library() != VK_SUCCESS) {
         ps5log("FAIL loading RADV library");
         goto fail;
@@ -71,8 +79,11 @@ int main(void) {
         .queueFamilyIndex = family, .queueCount = 1, .pQueuePriorities = &priority};
     VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci};
-    VK_CHECK(vkCreateDevice(physical, &dci, NULL, &device));
+    result = vkCreateDevice(physical, &dci, NULL, &device);
+    ps5log("vkCreateDevice result=%d device=%p", result, (void *)device);
+    if (result != VK_SUCCESS) goto fail;
     load_vulkan_device_functions(device);
+    ps5log("device entrypoints loaded");
     test_vkCmdClearColorImage = (PFN_vkCmdClearColorImage)vkGetDeviceProcAddr(device, "vkCmdClearColorImage");
     test_vkCmdCopyImageToBuffer = (PFN_vkCmdCopyImageToBuffer)vkGetDeviceProcAddr(device, "vkCmdCopyImageToBuffer");
     test_vkInvalidateMappedMemoryRanges = (PFN_vkInvalidateMappedMemoryRanges)
@@ -89,17 +100,24 @@ int main(void) {
     VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = 65536, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     VK_CHECK(vkCreateBuffer(device, &bci, NULL, &buffer));
+    ps5log("readback buffer created");
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(device, buffer, &req);
     VkPhysicalDeviceMemoryProperties mp;
     vkGetPhysicalDeviceMemoryProperties(physical, &mp);
+    ps5log("physical memory types=%u heaps=%u readback typebits=%x size=%llu",
+        mp.memoryTypeCount, mp.memoryHeapCount, req.memoryTypeBits,
+        (unsigned long long)req.size);
     uint32_t type = UINT32_MAX;
     for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
         ps5log("memory type=%u flags=%x heap=%u", i, mp.memoryTypes[i].propertyFlags, mp.memoryTypes[i].heapIndex);
         if ((req.memoryTypeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
             type = i;
     }
-    if (type == UINT32_MAX) goto fail;
+    if (type == UINT32_MAX) {
+        ps5log("FAIL no host-visible memory type for readback");
+        goto fail;
+    }
     VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = req.size, .memoryTypeIndex = type};
     VK_CHECK(vkAllocateMemory(device, &mai, NULL, &memory));

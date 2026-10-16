@@ -68,7 +68,7 @@ def main():
         shutil.copyfile(library, binary / 'radv.so')
         mesa.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
                   'radv.so', 'radv.o'], cwd=binary)
-        libs += [binary / 'radv.o', '-lSceAgc', '-lSceAgcDriver']
+        libs += [binary / 'radv.o', '-lSceAgc', '-lSceAgcDriver', '-Wl,--wrap=__assert']
         libs += ast.literal_eval(cross['built-in options']['c_link_args'])
     else:
         libs += ['-lm', '-ldl']

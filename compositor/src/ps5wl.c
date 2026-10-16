@@ -1007,13 +1007,10 @@ static int terminate_validation(void *data) {
 }
 #endif
 static void payload_log(enum wlr_log_importance importance, const char *fmt, va_list args) {
-	(void)importance;
+	if (importance > wlr_log_get_verbosity()) return;
 	char line[1024];
 	vsnprintf(line, sizeof(line), fmt, args);
 	ps5log("%s", line);
-}
-static void wayland_log(const char *fmt, va_list args) {
-	payload_log(WLR_ERROR, fmt, args);
 }
 #else
 static void virtual_keyboard_created(struct wl_listener *listener, void *data) {
@@ -1037,7 +1034,6 @@ static int compositor_main(int argc, char *argv[]) {
 	ps5log("compositor entry pid=%d uid=%d; initializing wlroots logger", getpid(), getuid());
 	ps5log_flush_wait(500);
 	wlr_log_init(WLR_INFO, payload_log);
-	wl_log_set_handler_server(wayland_log);
 	ps5log("wlroots logger initialized");
 	setenv("XDG_RUNTIME_DIR", "/system_tmp", true);
 #else

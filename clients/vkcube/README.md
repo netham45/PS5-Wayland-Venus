@@ -26,7 +26,12 @@ terminates its own compositor in `finally` and propagates either exit status.
 
 ## Console sequence
 
-Run the GPU smoke **without** the compositor first:
+Start the compositor through its foreground BigApp launcher and wait for its
+Wayland socket. Keep that app active while running either Vulkan payload.
+With no foreground app, the measured `sceKernelGetDirectMemorySize()` is
+zero and RADV exposes no memory heaps; with the compositor foreground it
+reports 12 GiB. This is an application-budget prerequisite, not a reason to
+invent a fixed-size fallback. Then run the GPU smoke:
 
 ```
 tools/ps5ctl run build/ps5/vkcube/ps5wl-vktest.elf
@@ -43,8 +48,7 @@ and opens no VideoOut handle. It destroys resources, then keeps the log
 service alive for 30 seconds before exiting. Kill only receipt-owned
 processes if a failure leaves the process alive.
 
-Only after that passes, start the compositor by its normal deployment path,
-then:
+After that passes, leave the compositor foreground and run the cube:
 
 ```
 tools/ps5ctl run build/ps5/vkcube/ps5wl-vkcube.elf
@@ -59,6 +63,13 @@ run two differently built driver payloads concurrently. The compositor uses
 pixman and owns VideoOut; the client builds only the Wayland WSI platform.
 Compare client presents with the compositor's surface commit/output frame
 counters and screenshot before the final human end-to-end interactive check.
+
+PS5 startup records process credentials and the direct-memory pool's largest
+available range using 2-MiB alignment before loading RADV. A fatal assertion
+repeats that query and includes a bounded snapshot of captured stderr in the
+pull log, so native allocator and Vulkan heap failures remain observable.
+The per-process capture file is removed on normal exit or after an assertion
+snapshot; the assertion still terminates the payload with failure.
 
 ## Evidence
 
@@ -83,8 +94,32 @@ all 16,384 image-clear readback words matched `0x1a2b3c4d`, with
 surface and did not link or open VideoOut. The second run also exercised
 atomic driver-file replacement. Console Wayland cube acceptance remains unproven.
 
+The descriptor-wrapper cutover was clean-built (825 targets) with both C and
+C++ compiler paths explicitly selecting `cross/bin/prospero-clang{,++}`.
+Wrapped payload pid 143 at 2771460 ms reported a 12-GiB direct-memory pool,
+11 memory types, two heaps and the same zero-mismatch `RESULT PASS` while
+foreground compositor pid 142 was active. Without that foreground context,
+the wrapped payload observed a zero-byte pool and correctly failed acceptance.
+
 The embedded 21,200,784-byte driver was extracted successfully under
 `/data/ps5wl`. A prior `/system_tmp` extraction failed with `ENOSPC` after
 262,144 bytes; its truncated file was removed. Use `/data`, not the small
 temporary filesystem, for the shared driver.
 
+The full-HD Wayland run remains blocked by a real native allocation failure.
+At 4145472 ms, cube pid 191 reported `uid=1 euid=0 gid=1 egid=1` and a
+12,884,901,888-byte pool, but
+`sceKernelAvailableDirectMemorySize(0, pool, 0x200000, ...)` returned
+`0x8002000c` before loading RADV; its initialized output sentinels remained
+`start=-1 bytes=0`. The same query returned the same values at the assertion.
+Captured Mesa stderr then identified the actual failed BO: requested
+8,294,400 bytes, input alignment 65,536, flags `0x253`; the native
+`sceKernelAllocateDirectMemory` request was 8,306,688 bytes and returned
+`0x80020023`. Vulkan selected memory type 2 in heap 0, whose advertised size
+was 4,294,967,296 bytes; overallocation tracking was disabled. The first
+`vkCreateSwapchainKHR` returned `VK_ERROR_OUT_OF_DEVICE_MEMORY` for
+1920x1080, format 44, four images, before any successful present. This is
+not evidence of a working interactive Vulkan window or of an exhausted
+global pool: the available-range query already failed in this client before
+Vulkan initialization. No budget syscall, heap-size override or image-count
+reduction was attempted.

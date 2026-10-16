@@ -46,7 +46,41 @@
      struct wl_display *wayland_display;
      struct wl_registry *registry;
      struct wl_compositor *compositor;
-@@ -3052,6 +3065,8 @@
+@@ -1169,6 +1182,7 @@
+         // Get the index of the next available swapchain image:
+         err = vkAcquireNextImageKHR(demo->device, demo->swapchain, UINT64_MAX, current_submission.image_acquired_semaphore,
+                                     VK_NULL_HANDLE, &current_swapchain_image_index);
++        if (err != VK_SUCCESS) ps5log("vkAcquireNextImageKHR result=%d", err);
+ 
+         if (err == VK_ERROR_OUT_OF_DATE_KHR) {
+             // demo->swapchain is out of date (e.g. the window was resized) and
+@@ -1234,6 +1248,7 @@
+     submit_info.signalSemaphoreCount = 1;
+     submit_info.pSignalSemaphores = &current_swapchain_resource.draw_complete_semaphore;
+     err = vkQueueSubmit(demo->graphics_queue, 1, &submit_info, current_submission.fence);
++    if (err != VK_SUCCESS) ps5log("vkQueueSubmit graphics result=%d", err);
+     assert(!err);
+ 
+     if (demo->separate_present_queue) {
+@@ -1337,6 +1352,7 @@
+     }
+ 
+     err = vkQueuePresentKHR(demo->present_queue, &present);
++    if (err != VK_SUCCESS) ps5log("vkQueuePresentKHR result=%d", err);
+     demo->current_submission_index += 1;
+     demo->current_submission_index %= FRAME_LAG;
+     demo->first_swapchain_frame = false;
+@@ -1530,6 +1546,9 @@
+     };
+     uint32_t i;
+     err = vkCreateSwapchainKHR(demo->device, &swapchain_ci, NULL, &demo->swapchain);
++    if (err != VK_SUCCESS)
++        ps5log("vkCreateSwapchainKHR result=%d extent=%ux%u format=%d images=%u",
++            err, swapchainExtent.width, swapchainExtent.height, demo->format, desiredNumOfSwapchainImages);
+     assert(!err);
+ 
+     // If we just re-created an existing swapchain, we should destroy the old
+@@ -3052,6 +3071,8 @@
                  demo_draw(demo);
                  if (!demo->is_minimized) {
                      demo->curFrame++;
@@ -55,7 +89,7 @@
                  }
                  if (demo->frameCount != INT32_MAX && demo->curFrame == demo->frameCount) demo->quit = true;
              }
-@@ -3742,12 +3757,7 @@
+@@ -3742,12 +3763,7 @@
  #endif
  #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
  static const char *demo_init_wayland_connection(struct demo *demo) {
@@ -69,7 +103,7 @@
  
      if (demo->wayland_display == NULL) {
          return "Cannot connect to wayland.";
-@@ -5101,6 +5111,11 @@
+@@ -5101,8 +5117,14 @@
  #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
  int main(int argc, char **argv) {
      struct demo demo;
@@ -80,8 +114,31 @@
 +    }
  
      demo_init(&demo, argc, argv);
++    ps5log("Vulkan instance and Wayland connection initialized");
      switch (demo.wsi_platform) {
-@@ -5193,6 +5208,8 @@
+         default:
+         case (WSI_PLATFORM_AUTO):
+@@ -5143,14 +5165,19 @@
+             break;
+ #endif
+     }
++    ps5log("Wayland window created");
+     demo_create_surface(&demo);
++    ps5log("Vulkan Wayland surface created");
+     if (demo.wsi_platform != WSI_PLATFORM_DISPLAY) {
+         demo_select_physical_device(&demo);
+     }
++    ps5log("Vulkan physical device selected");
+ 
+     demo_init_vk_swapchain(&demo);
++    ps5log("Vulkan device and swapchain configuration initialized");
+ 
+     demo_prepare(&demo);
++    ps5log("Vulkan prepare call completed");
+ 
+     switch (demo.wsi_platform) {
+         default:
+@@ -5193,6 +5220,8 @@
      }
  
      demo_cleanup(&demo);

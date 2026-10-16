@@ -1,0 +1,68 @@
+--- a/src/mesa/compat/c11/threads.h
++++ b/src/mesa/compat/c11/threads.h
+@@ -29,6 +29,12 @@
+ #ifndef EMULATED_THREADS_H_INCLUDED_
+ #define EMULATED_THREADS_H_INCLUDED_
+ 
++#if defined(__linux__)
++#include <pthread.h>
++#include <threads.h>
++/* glibc's mtx_t uses the zero-initialized pthread mutex representation. */
++#define _MTX_INITIALIZER_NP {0}
++#else
+ #include <time.h>
+ 
+ #ifndef TIME_UTC
+@@ -68,4 +74,5 @@
+ 
+ 
+ 
++#endif /* native Linux C11 threads */
+ #endif /* EMULATED_THREADS_H_INCLUDED_ */
+--- a/src/gallium/auxiliary/tgsi/tgsi_text.c
++++ b/src/gallium/auxiliary/tgsi/tgsi_text.c
+@@ -84,7 +84,7 @@
+ static inline bool skip_n_chars(const char **pcur,
+                                    int n)
+ {
+-   char* str = memchr(*pcur, '\0', n);
++   const char* str = memchr(*pcur, '\0', n);
+    if (unlikely(str)) {
+       *pcur = str;
+       return false;
+--- a/src/venus/vkr_library.c
++++ b/src/venus/vkr_library.c
+@@ -41,8 +41,9 @@
+    if (lib->handle)
+       return true;
+ 
+-   lib->handle = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+-   if (lib->handle == NULL)
++   const char *path = getenv("PS5WL_VULKAN_LIBRARY");
++   lib->handle = dlopen(path ? path : "libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
++   if (lib->handle == NULL && !path)
+       lib->handle = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (lib->handle == NULL) {
+       vkr_log("failed to open libvulkan: %s", dlerror());
+@@ -57,6 +58,11 @@
+    /* ISO C forbids conversion of object pointer to function pointer type */
+    lib->GetInstanceProcAddr =
+       (PFN_vkGetInstanceProcAddr)dlsym(lib->handle, "vkGetInstanceProcAddr");
++   if (!lib->GetInstanceProcAddr) {
++      dlerror();
++      lib->GetInstanceProcAddr =
++         (PFN_vkGetInstanceProcAddr)dlsym(lib->handle, "vk_icdGetInstanceProcAddr");
++   }
+ #pragma GCC diagnostic pop
+ 
+    char *error = dlerror();
+--- a/vtest/threadpool.c
++++ b/vtest/threadpool.c
+@@ -6,6 +6,7 @@
+ #include "threadpool.h"
+ #include "list.h"
+ #include "macros.h"
++#include <stdlib.h>
+ 
+ struct threadpool_worker {
+    struct list_head node;

@@ -33,7 +33,7 @@ physical input. Separate client rendering has its own acceptance requirement.
 
 After the universal PS5 descriptor-compatibility cutover, foreground PID 132
 imported separate clients 133 (`simple-shm`) and 134 (`demo`) at 1920x1080.
-Surface commits and pixman compositions exceeded 600/1320 respectively; actual
+Surface commits reached 600/720; pixman compositions reached 1320. Actual
 completed-scanout PNGs contain the animated color pattern and readable demo
 text, not just the compositor's cursor. Evidence is under
 `build/ps5/evidence/compositor-fd-fixed.log` and
@@ -44,6 +44,46 @@ merged mouse handle `0xc0700`. Physical keyboard/mouse/DualSense events remain
 a separate human-interaction check. PID 132 completed 3541 flips and closed
 VideoOut, deleted its equeue, unmapped and released direct memory; release
 results were zero and its process disappeared after native app exit.
+
+Vulkan tests must retain a foreground app context. On this console, otherwise
+identical wrapped offscreen tests saw zero direct-memory pool size without a
+BigApp, versus 12 GiB with compositor PID 142 active. In that live context,
+test PID 143 exposed 11 memory types/two heaps and verified all 16,384 GPU-written
+words. That is compute/readback proof, not successful Wayland presentation.
+
+The separate native Wayland Vulkan client still has no successful presentation
+proof. Its instrumented PID 191 reported a 12 GiB pool but
+`AvailableDirectMemorySize(2 MiB)=0x8002000c` before loading Mesa; an actual
+8,306,688-byte RADV allocation returned `0x80020023`. The foreground compositor
+PID 190 instead reported the complete pool available and allocated/mapped its
+20 MiB scanout with zero results. That run completed 3597 flips and clean
+resource release, recorded in
+`build/ps5/evidence/compositor-vulkan-uid-allocation.log`.
+Do not turn a failed native allocation into an invented memory budget or claim
+offscreen GPU readback as successful Wayland Vulkan rendering.
+
+A coordinator-approved, isolated no-VideoOut BigApp fork diagnostic was then
+stopped after the console became unreachable. The complete last log,
+`build/ps5/evidence/bigapp-fork-budget.log`, is:
+
+```text
+[4432340 ms] ps5wl-fork-budget: fork BigApp parent pid=195 uid=0 euid=0 own_info_rc=0x0 own_app=0xe019 running_bigapp=0xe019
+[4432342 ms] ps5wl-fork-budget: single fork returned child=196 errno=0
+[4437342 ms] ps5wl-fork-budget: CHILD memory result missing bytes=0 expected=64
+```
+
+The child was to query native direct memory, allocate/map/release 8 MiB, report
+through a pipe, and exit; the parent used nonblocking wait4 with a five-second
+deadline. No child memory result, successful reap, or shell-exit result was
+observed. Both the process-list request and prepared title-checked KillApp
+helper launch failed with `[Errno 113] No route to host`; the helper was not
+observed launching. Console loss followed the fork, but the failing syscall and
+cause are unproven. All owned console actions/log pullers were stopped.
+The temporary launcher source/build target was restored and the normal probe
+rebuilt; resident installer 130 and its installed 60-second compositor were not
+modified by this experiment. Recovery must remove or replace the managed
+`ps5wl-launch-probe.elf` fork body and `ps5wl-launch-fork.elf` driver before
+either is launched again. Do not repeat this experiment automatically.
 
 The exact SDL tile extent is 8,912,896 bytes. The native `tiling-bounds` test
 enumerates all 2,073,600 scanout pixels, proves unique addresses, and measures
@@ -65,6 +105,10 @@ app-manager termination instead of executing the forbidden raw BigApp exit.
 
 Wayland library diagnostics are routed to the same TCP logger as wlroots, so
 protocol failures remain observable without payload stderr forwarding.
+The payload callback honors wlroots' configured verbosity. Finite validation
+builds log every flip timestamp; normal interactive builds retain the first and
+every-120th completion/status sample without filling the ring with per-flip
+or wlroots debug messages.
 
 A thread blocks in the Sce flip equeue with a bounded shutdown timeout and
 writes completion timestamps to a pipe watched by the Wayland event loop.

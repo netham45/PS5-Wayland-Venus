@@ -142,8 +142,10 @@ static int flip_ready(int fd, uint32_t mask, void *data) {
  b->pending = false;
  b->displayed = b->pending_index;
  ++b->flips;
+#if PS5WL_TEST_SECONDS > 0
  ps5log("flip-event seq=%llu index=%u monotonic=%lld.%09ld",
   (unsigned long long)b->flips, b->displayed, (long long)msg.when.tv_sec, msg.when.tv_nsec);
+#endif
  if (b->flips == 1) b->first_flip = msg.when;
  struct wlr_output_event_present event = { .commit_seq = b->commit_seq,
  .presented = true, .when = msg.when, .seq = b->flips, .refresh = 16666667,

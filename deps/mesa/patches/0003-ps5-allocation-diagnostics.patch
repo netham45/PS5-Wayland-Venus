@@ -1,0 +1,19 @@
+--- a/src/amd/vulkan/winsys/ps5/radv_ps5_bo.c
++++ b/src/amd/vulkan/winsys/ps5/radv_ps5_bo.c
+@@ -12,6 +12,7 @@
+ #include <string.h>
+ 
+ #include "util/os_time.h"
++#include "util/log.h"
+ #include "util/u_atomic.h"
+ 
+ /* A buffer is one direct-memory allocation, mapped for the CPU and the GPU at
+@@ -70,6 +71,8 @@
+       return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (replayable ? !radv_ps5_memory_alloc_replayable(size, alignment, window32, replay_address, &bo->memory)
+                   : !radv_ps5_memory_alloc(size, alignment, window32, &bo->memory)) {
++      mesa_loge("radv/ps5: allocation size=%" PRIu64 " alignment=%u flags=%" PRIx64 ": %s",
++                size, alignment, (uint64_t)flags, radv_ps5_memory_error());
+       free(bo);
+       return replay_address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
