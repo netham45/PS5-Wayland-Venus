@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Build and exercise the host logger inside the pinned build environment."""
+import os
+from pathlib import Path
+import re
+import shlex
+import socket
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+if os.environ.get("PS5WL_BUILD_ENV") != "1":
+    os.execv(str(ROOT / "env/run"), [str(ROOT / "env/run"), str(Path(__file__).resolve())])
+
+BUILD = ROOT / "build/host/ps5log-test"
+BUILD.mkdir(parents=True, exist_ok=True)
+subprocess.run(shlex.split(os.environ.get("CC", "cc")) + [
+    "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread", "-Icommon/ps5log",
+    "common/ps5log/ps5log.c", "common/ps5log/test/server.c", "-o", str(BUILD / "server")
+], cwd=ROOT, check=True)
+
+with socket.socket() as reservation:
+    reservation.bind(("127.0.0.1", 0))
+    port = reservation.getsockname()[1]
+
+
+def line(reader):
+    data = reader.readline().decode()
+    match = re.fullmatch(r"\[([0-9]+) ms\] host-test: (.*)\n", data)
+    assert match, repr(data)
+    return data.rstrip(), match[2]
+
+
+with (BUILD / "stderr.log").open("w+") as stderr:
+    server = subprocess.Popen([str(BUILD / "server"), str(port)], stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=stderr, text=True)
+    clients = []
+    readers = []
+    try:
+        assert server.stdout.readline() == "ready\n"
+        for _ in range(2):
+            client = socket.create_connection(("127.0.0.1", port), timeout=3)
+            clients.append(client)
+            reader = client.makefile("rb")
+            readers.append(reader)
+            backlog = [line(reader) for _ in range(256)]
+            assert [text for _, text in backlog] == [f"backlog-{i:03}" for i in range(44, 300)]
+            print(f"client {_ + 1}: 256 backlog lines; {backlog[0][0]} ... {backlog[-1][0]}")
+        server.stdin.write("live\n")
+        server.stdin.flush()
+        for index, reader in enumerate(readers):
+            live = [line(reader), line(reader)]
+            assert [text for _, text in live] == ["live-one", "live-two"]
+            print(f"client {index + 1}: " + " | ".join(raw for raw, _ in live))
+        # A disconnected peer must not deliver SIGPIPE or block another client.
+        readers.pop(0).close()
+        clients.pop(0).close()
+        replacement = socket.create_connection(("127.0.0.1", port), timeout=3)
+        clients.append(replacement)
+        readers.append(replacement.makefile("rb"))
+        replay = [line(readers[-1]) for _ in range(256)]
+        assert [text for _, text in replay] == [f"backlog-{i:03}" for i in range(46, 300)] + ["live-one", "live-two"]
+        print("replacement client: 256 ordered backlog + live lines replayed")
+        server.stdin.write("quit\n")
+        server.stdin.flush()
+        for reader in readers:
+            raw, text = line(reader)
+            assert text == "goodbye"
+            assert reader.read() == b""
+            print(raw)
+        assert server.wait(timeout=3) == 0
+        stderr.seek(0)
+        mirrored = stderr.readlines()
+        assert len(mirrored) == 303, len(mirrored)
+        assert all(re.fullmatch(r"\[[0-9]+ ms\] host-test: .*\n", item) for item in mirrored)
+        print("PASS: ring wrap, two clients, backlog/live ordering, disconnect/reconnect, stderr mirror, flush linger, EOF")
+    finally:
+        for reader in readers:
+            reader.close()
+        for client in clients:
+            client.close()
+        if server.poll() is None:
+            server.terminate()
+            server.wait(timeout=3)

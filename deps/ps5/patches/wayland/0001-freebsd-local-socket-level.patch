@@ -1,0 +1,13 @@
+Rationale: FreeBSD-11 SDK omits the newer SOL_LOCAL name; local socket options use protocol level zero.
+--- a/src/wayland-os.c
++++ b/src/wayland-os.c
+@@ -36,6 +36,9 @@
+ #include <sys/epoll.h>
+ #include <sys/mman.h>
+ #include <sys/un.h>
++#if defined(__FreeBSD__) && !defined(SOL_LOCAL)
++#define SOL_LOCAL 0
++#endif
+ #ifdef HAVE_SYS_UCRED_H
+ #include <sys/ucred.h>
+ #endif

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The SDK's prospero-pkg-config forces its own /user/homebrew sysroot.
+# Match its --static contract, but never search SDK or container packages.
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_PATH=
+export PKG_CONFIG_LIBDIR="$root/build/ps5/sysroot/lib/pkgconfig"
+unset PKG_CONFIG_SYSROOT_DIR DESTDIR
+exec pkg-config --static "$@"

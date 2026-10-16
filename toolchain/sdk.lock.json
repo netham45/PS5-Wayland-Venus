@@ -1,0 +1,7 @@
+{
+  "name": "ps5-payload-sdk",
+  "tag": "v0.44",
+  "url": "https://github.com/ps5-payload-dev/sdk/releases/download/v0.44/ps5-payload-sdk.zip",
+  "sha256": "4d06eab777bb135705b5a6816688c9132efb246093fe606ac488ab6cf65ca5b0",
+  "includes_libcxx": true
+}

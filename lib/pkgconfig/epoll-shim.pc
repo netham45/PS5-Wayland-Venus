@@ -1,0 +1,12 @@
+prefix=/home/netham45/ps5_wayland/build/ps5/sysroot
+exec_prefix=${prefix}
+libdir=/home/netham45/ps5_wayland/build/ps5/sysroot/lib
+includedir=/home/netham45/ps5_wayland/build/ps5/sysroot/include
+
+Name: epoll-shim
+URL: https://github.com/jiixyj/epoll-shim
+Description: Small epoll implementation using kqueue
+Version: 
+Libs: -L${libdir} -lepoll-shim
+Libs.private: -pthread -lrt
+Cflags: -I${includedir}/libepoll-shim

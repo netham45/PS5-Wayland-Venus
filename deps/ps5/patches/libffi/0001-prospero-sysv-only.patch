@@ -1,0 +1,108 @@
+Rationale: prospero-clang rejects ms_abi; build SysV calls/closures and reject unsupported Windows CIFs with FFI_BAD_ABI.
+--- a/configure.host
++++ b/configure.host
+@@ -314,7 +314,11 @@
+ 	if test x"$TARGET_X32" = xyes; then
+ 		SOURCES="ffi64.c unix64.S"
+ 	else
+-		SOURCES="ffi64.c unix64.S ffiw64.c win64.S"
++		if test "$LIBFFI_PS5" = yes; then
++			SOURCES="ffi64.c unix64.S"
++		else
++			SOURCES="ffi64.c unix64.S ffiw64.c win64.S"
++		fi
+ 	fi
+ 	;;
+   X86_WIN64)
+--- a/src/x86/ffi64.c
++++ b/src/x86/ffi64.c
+@@ -392,7 +392,7 @@
+ 
+ /* Perform machine dependent cif processing.  */
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+ extern ffi_status
+ ffi_prep_cif_machdep_efi64(ffi_cif *cif);
+ #endif
+@@ -406,7 +406,7 @@
+   size_t bytes, n, rtype_size;
+   ffi_type *rtype;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_cif_machdep_efi64(cif);
+ #endif
+@@ -677,7 +677,7 @@
+ 		   flags, rvalue, fn);
+ }
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+ extern void
+ ffi_call_efi64(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue);
+ #endif
+@@ -703,7 +703,7 @@
+         }
+     }
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     {
+       ffi_call_efi64(cif, fn, rvalue, avalue);
+@@ -715,7 +715,7 @@
+ 
+ #ifdef FFI_GO_CLOSURES
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+ extern void
+ ffi_call_go_efi64(ffi_cif *cif, void (*fn)(void), void *rvalue,
+ 		  void **avalue, void *closure);
+@@ -725,7 +725,7 @@
+ ffi_call_go (ffi_cif *cif, void (*fn)(void), void *rvalue,
+ 	     void **avalue, void *closure)
+ {
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     {
+       ffi_call_go_efi64(cif, fn, rvalue, avalue, closure);
+@@ -744,7 +744,7 @@
+ extern void ffi_closure_unix64_sse_alt(void) FFI_HIDDEN;
+ #endif
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+ extern ffi_status
+ ffi_prep_closure_loc_efi64(ffi_closure* closure,
+ 			   ffi_cif* cif,
+@@ -773,7 +773,7 @@
+   void (*dest)(void);
+   char *tramp = closure->tramp;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_closure_loc_efi64(closure, cif, fun, user_data, codeloc);
+ #endif
+@@ -910,7 +910,7 @@
+ extern void ffi_go_closure_unix64(void) FFI_HIDDEN;
+ extern void ffi_go_closure_unix64_sse(void) FFI_HIDDEN;
+ 
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+ extern ffi_status
+ ffi_prep_go_closure_efi64(ffi_go_closure* closure, ffi_cif* cif,
+ 			  void (*fun)(ffi_cif*, void*, void**, void*));
+@@ -920,7 +920,7 @@
+ ffi_prep_go_closure (ffi_go_closure* closure, ffi_cif* cif,
+ 		     void (*fun)(ffi_cif*, void*, void**, void*))
+ {
+-#ifndef __ILP32__
++#if !defined(__ILP32__) && !defined(LIBFFI_PS5)
+   if (cif->abi == FFI_EFI64 || cif->abi == FFI_GNUW64)
+     return ffi_prep_go_closure_efi64(closure, cif, fun);
+ #endif

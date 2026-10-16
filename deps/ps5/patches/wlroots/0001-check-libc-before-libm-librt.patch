@@ -1,0 +1,20 @@
+Rationale: PS5 exports math and POSIX clocks from its libc/kernel libraries, not separate libm or librt.
+--- a/meson.build
++++ b/meson.build
+@@ -120,8 +120,14 @@
+ 	fallback: 'pixman',
+ 	default_options: ['werror=false'],
+ )
+-math = cc.find_library('m')
+-rt = cc.find_library('rt')
++math = []
++if not cc.has_function('cos', prefix: '#include <math.h>', args: ['-fno-builtin'])
++	math = cc.find_library('m')
++endif
++rt = []
++if not cc.has_function('clock_gettime', prefix: '#include <time.h>')
++	rt = cc.find_library('rt')
++endif
+ 
+ wlr_files = []
+ wlr_deps = [

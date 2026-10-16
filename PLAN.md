@@ -10,8 +10,11 @@ Every claim about the console is either cited evidence or marked
 
 ## Decisions
 
-- **Process model:** the compositor is an elfldr payload (own process, unjailed,
-  root, can spawn, AF_UNIX, dlopen). A home-screen entry triggers it (pldmgr-style
+- **Process model:** the compositor is an elfldr payload (own process, can spawn,
+  AF_UNIX, dlopen). Observed on the dev console (2026-10-16, hello payload):
+  uid 1 (not root), parent elfldr, AF_UNIX bind on `/system_tmp` OK,
+  `shm_open(SHM_ANON)`+`mmap(MAP_SHARED)` OK, page size 16384; jail status
+  unprobed. A home-screen entry triggers it (pldmgr-style
   launcher app or a stub title that streams the ELF to `127.0.0.1:9021`).
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
@@ -35,12 +38,31 @@ Every claim about the console is either cited evidence or marked
   Payload logs therefore use a **pull model**: the payload listens on TCP and
   the host connects (see Contracts).
 
+## Build environment
+
+The WSL2 Ubuntu 24.04 host is only where the environment is set up; nothing is
+built against its packages or toolchain. All builds run inside the rootless
+podman image `ps5wl-build` (`env/Containerfile`, pinned by digest and package
+snapshot in `env/env.lock.json`), entered with `env/run <cmd...>`. Every library
+for host and PS5, including wayland-scanner, expat, libffi and xkeyboard-config
+data, comes from `deps/versions.lock.json`; pkg-config is confined to the
+sysroot with `PKG_CONFIG_LIBDIR`.
+
+Resolved pins (2026-10-16): Arch Linux image digest
+`sha256:363129b67b2bc6c5a634f8fb4961a7e2eba213a2ec075d159127b1260290a722`
+with the Arch Linux Archive snapshot `2026/10/15` (LLVM/clang 23.1.1, meson
+1.12.1). `env/run` builds the image on first use and sets
+`PS5WL_BUILD_ENV=1` and `LLVM_CONFIG=/usr/bin/llvm-config`. ps5-payload-sdk
+v0.44 (official ZIP, checksum in `toolchain/sdk.lock.json`; libc++/libc++abi/
+libunwind bundled).
+
 ## Repository layout and ownership
 
 ```
 PLAN.md, Makefile, .gitignore      top-level; Makefile only dispatches to scripts
 toolchain/                         SDK install (repo-local .sdk/), env.sh, sdk.lock.json
 examples/hello/                    toolchain smoke payload (uses common/ps5log)
+env/                               build container (Containerfile, env.lock.json, run wrapper)
 common/ps5log/                     payload-side TCP log server (C, libc only)
 tools/ps5ctl                       host CLI for Payload Manager + log pulling (Python stdlib)
 deps/versions.lock.json            pinned upstream sources (URL, tag/commit, sha256) for host and PS5
@@ -61,8 +83,14 @@ build/, .sdk/                      generated, git-ignored
   `int ps5log_init(const char *name, uint16_t port); void ps5log(const char *fmt, ...);`
   It listens on `port` (default 9530; one port per concurrently running
   payload), keeps a ring buffer of early lines, and streams buffered + live
-  lines to every connected client. Also mirrors to stderr/klog.
+  lines to every connected client. Also mirrors to stderr/klog. Ring: 256
+  lines of up to 1024 bytes; up to 16 concurrent nonblocking clients; a client
+  overtaken by ring wrap is disconnected. `ps5log_flush_wait(int ms)` lingers
+  the full duration so late pulls still get the backlog.
   `tools/ps5ctl logs --port N` connects and prints.
+- `tools/ps5ctl` keeps upload receipts in `.cache/ps5ctl/uploads.json` per
+  host:port. It only uploads `ps5wl-*` names and only launches, deletes or
+  kills payloads it has a receipt for (`kill --force` overrides explicitly).
 - `deps/versions.lock.json` is the single pin list; host and PS5 builds use
   identical upstream versions.
 - Install prefixes: `build/ps5/sysroot` and `build/host/sysroot`

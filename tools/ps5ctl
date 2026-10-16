@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Payload Manager v0.5.2 client (Python standard library only).
+
+PS5_HOST defaults to 192.168.3.211; PLDMGR_PORT defaults to 8084.
+Upload/run add ps5wl- to the local basename unless --name specifies a prefixed
+name. Checkout-local receipts in .cache/ps5ctl/uploads.json protect existing
+payloads: launch/delete require ownership; kill also requires an exact process
+name match unless --force is explicit. Losing receipts intentionally loses
+permission to mutate existing payloads. logs retries connection establishment
+for --retry seconds, then streams until EOF (Ctrl-C interrupts an ongoing pull).
+
+Examples: ps5ctl run examples/hello/hello.elf
+          ps5ctl logs --port 9530 --retry 30
+          ps5ctl delete ps5wl-hello.elf
+
+Protocol sources: itsPLK/ps5-payload-manager tag v0.5.2, src/http_server.c,
+src/payload_mgr.c, src/utils.c, include/pldmgr.h. Upload is a raw ELF body
+with ?filename=, not multipart. /loadpayload: accepts a managed absolute path
+or resolvable basename; resolve the actual listed path after importing.
+"""
+import argparse
+import http.client
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import socket
+import sys
+import time
+from urllib.parse import quote, urlencode
+
+ROOT = Path(__file__).resolve().parent.parent
+RECEIPTS = ROOT / ".cache/ps5ctl/uploads.json"
+
+
+class Error(Exception):
+    pass
+
+
+class Client:
+    def __init__(self):
+        self.host = os.environ.get("PS5_HOST", "192.168.3.211")
+        self.port = int(os.environ.get("PLDMGR_PORT", "8084"))
+        self.key = f"{self.host}:{self.port}"
+        self.receipts = json.loads(RECEIPTS.read_text()) if RECEIPTS.exists() else {}
+        self.owned = self.receipts.setdefault(self.key, {})
+
+    def save(self):
+        RECEIPTS.parent.mkdir(parents=True, exist_ok=True)
+        temporary = RECEIPTS.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self.receipts, indent=2) + "\n")
+        temporary.replace(RECEIPTS)
+
+    def request(self, path, *, post=False, body=None, size=0, stream=False):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=30)
+        headers = {}
+        if post:
+            headers = {"X-PLDMGR-Request": "1", "Content-Length": str(size),
+                       "Content-Type": "application/octet-stream"}
+        try:
+            connection.request("POST" if post else "GET", path, body=body, headers=headers)
+            if stream:
+                # getresponse may detach a Connection: close socket from the
+                # connection; configure it while ownership is unambiguous.
+                connection.sock.settimeout(None)
+            response = connection.getresponse()
+            if response.status != 200:
+                text = response.read().decode("utf-8", "replace")
+                raise Error(f"HTTP {response.status} {response.reason} from {path}\n{text}")
+            if stream:
+                while data := response.read1(65536):
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                return ""
+            return response.read().decode("utf-8", "replace")
+        finally:
+            connection.close()
+
+    def listing(self):
+        data = json.loads(self.request("/list_payloads"))
+        paths = data["payloads"]
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            raise Error("Malformed /list_payloads: expected payloads array of paths")
+        return paths
+
+    def resolve(self, value, paths=None):
+        paths = self.listing() if paths is None else paths
+        matches = [p for p in paths if p == value or PurePosixPath(p).name == value]
+        if len(matches) != 1:
+            raise Error(f"Expected exactly one listed payload matching {value!r}; found {len(matches)}")
+        path = matches[0]
+        name = PurePosixPath(path).name
+        if not name.startswith("ps5wl-") or name not in self.owned:
+            raise Error(f"Refusing payload not uploaded by this checkout: {path}")
+        previous = self.owned[name]
+        if previous is not None and previous != path:
+            raise Error(f"Payload moved since upload: {path} (recorded {previous})")
+        return path
+
+    def upload(self, filename, name):
+        file = Path(filename)
+        name = name or (file.name if file.name.startswith("ps5wl-") else "ps5wl-" + file.name)
+        if not re.fullmatch(r"ps5wl-[A-Za-z0-9_.-]+\.(?:elf|bin)", name) or ".." in name or len(name) > 100:
+            raise Error("Upload name must be ps5wl-*.elf or ps5wl-*.bin, at most 100 ASCII characters, without '..'")
+        paths = self.listing()
+        # Legacy import removes old files in the derived folder. Ask the server
+        # for that folder rather than reimplementing its version/name stripping.
+        check = json.loads(self.request("/manage:check?" + urlencode({"filename": name})))
+        folder = check.get("folder_name")
+        if not isinstance(folder, str) or not folder or "/" in folder:
+            raise Error("Malformed /manage:check response: missing safe folder_name")
+        for path in paths:
+            if PurePosixPath(path).name == name or PurePosixPath(path).parent.name == folder:
+                self.resolve(path, paths)
+        with file.open("rb") as source:
+            size = os.fstat(source.fileno()).st_size
+            if not size:
+                raise Error("Refusing empty payload")
+            text = self.request("/manage:upload?" + urlencode({"filename": name, "mode": "replace"}),
+                                post=True, body=source, size=size)
+        expect_ok(text)
+        # Preserve ownership even if the subsequent read-only listing fails.
+        self.owned.setdefault(name, None)
+        self.save()
+        path = self.resolve(name)
+        self.owned[name] = path
+        self.save()
+        print(f"Uploaded {path}")
+        return path
+
+    def launch(self, name):
+        path = self.resolve(name)
+        text = self.request("/loadpayload:" + quote(path, safe="/"), post=True)
+        expect_ok(text)
+        print(text, end="" if text.endswith("\n") else "\n")
+
+    def delete(self, name):
+        path = self.resolve(name)
+        filename = PurePosixPath(path).name
+        text = self.request("/manage:delete?" + urlencode({"filename": filename}), post=True)
+        expect_ok(text)
+        del self.owned[filename]
+        self.save()
+        print(text, end="" if text.endswith("\n") else "\n")
+
+    def kill(self, pid, force):
+        processes = json.loads(self.request("/processes_list"))["processes"]
+        matches = [p for p in processes if p["pid"] == pid]
+        if len(matches) != 1:
+            raise Error(f"PID {pid} is not in /processes_list")
+        name = matches[0]["name"]
+        if not force and (not name.startswith("ps5wl-") or name not in self.owned):
+            raise Error(f"Refusing PID {pid} ({name}): name does not match an uploaded payload; --force overrides")
+        text = self.request("/process_kill?" + urlencode({"pid": pid}), post=True)
+        result = json.loads(text)
+        if result.get("ok") is not True:
+            raise Error(text)
+        print(text)
+
+
+def expect_ok(text):
+    if text.strip() != "OK":
+        raise Error(f"Payload Manager rejected action:\n{text}")
+
+
+def logs(host, port, retry):
+    deadline = time.monotonic() + retry
+    while True:
+        try:
+            connection = socket.create_connection((host, port), timeout=max(0.1, min(3, deadline - time.monotonic())))
+            break
+        except OSError as error:
+            if time.monotonic() >= deadline:
+                raise Error(f"Cannot connect to logs at {host}:{port}: {error}") from error
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+    with connection:
+        connection.settimeout(None)
+        while data := connection.recv(65536):
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for command in ("upload", "run"):
+        sub = commands.add_parser(command)
+        sub.add_argument("file")
+        sub.add_argument("--name")
+    for command in ("launch", "delete"):
+        commands.add_parser(command).add_argument("name")
+    commands.add_parser("ps")
+    commands.add_parser("payloads")
+    sub = commands.add_parser("kill")
+    sub.add_argument("pid", type=int)
+    sub.add_argument("--force", action="store_true")
+    sub = commands.add_parser("logs")
+    sub.add_argument("--port", type=int, default=9530)
+    sub.add_argument("--retry", type=float, default=10, metavar="SECONDS")
+    commands.add_parser("pmlog").add_argument("--events", action="store_true", help="stream /events instead of GET /log")
+    args = parser.parse_args()
+    try:
+        if args.command == "logs":
+            if not 1 <= args.port <= 65535 or args.retry < 0:
+                raise Error("Log port must be 1..65535; retry seconds must be nonnegative")
+            logs(os.environ.get("PS5_HOST", "192.168.3.211"), args.port, args.retry)
+            return 0
+        client = Client()
+        if args.command in ("upload", "run"):
+            path = client.upload(args.file, args.name)
+            if args.command == "run":
+                client.launch(path)
+        elif args.command == "launch":
+            client.launch(args.name)
+        elif args.command == "delete":
+            client.delete(args.name)
+        elif args.command == "kill":
+            if args.pid <= 0:
+                raise Error("PID must be positive")
+            client.kill(args.pid, args.force)
+        elif args.command == "payloads":
+            for path in client.listing():
+                print(path)
+        elif args.command == "ps":
+            data = json.loads(client.request("/processes_list"))
+            print("PID\tNAME\tMEMORY MiB\tDAEMON")
+            for process in data["processes"]:
+                print(f'{process["pid"]}\t{process["name"]}\t{process["memory"]}\t{process["is_daemon"]}')
+        elif args.command == "pmlog":
+            text = client.request("/events" if args.events else "/log", stream=args.events)
+            if not args.events:
+                print(text, end="" if text.endswith("\n") else "\n")
+    except (Error, OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as error:
+        print(f"ps5ctl: {error}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

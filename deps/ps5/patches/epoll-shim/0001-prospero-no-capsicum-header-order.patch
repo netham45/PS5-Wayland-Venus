@@ -1,0 +1,39 @@
+Rationale: PS5 does not implement Capsicum; its sys/event.h also requires sys/types.h to be included first.
+--- a/src/epollfd_ctx.c
++++ b/src/epollfd_ctx.c
+@@ -2,7 +2,7 @@
+ 
+ #include <sys/types.h>
+ 
+-#if defined(__FreeBSD__)
++#if defined(__FreeBSD__) && !defined(__PROSPERO__)
+ #include <sys/capsicum.h>
+ #endif
+ #include <sys/event.h>
+@@ -1072,7 +1072,7 @@
+ 	registered_fds_node_destroy(fd2_node);
+ }
+ 
+-#if defined(__FreeBSD__)
++#if defined(__FreeBSD__) && !defined(__PROSPERO__)
+ static void
+ modify_fifo_rights_from_capabilities(RegisteredFDsNode *fd2_node)
+ {
+@@ -1152,7 +1152,7 @@
+ 			if (fl == O_RDWR) {
+ 				fd2_node->node_data.fifo.readable = true;
+ 				fd2_node->node_data.fifo.writable = true;
+-#if defined(__FreeBSD__)
++#if defined(__FreeBSD__) && !defined(__PROSPERO__)
+ 				modify_fifo_rights_from_capabilities(fd2_node);
+ #endif
+ 			} else if (fl == O_WRONLY) {
+--- a/src/timerfd.c
++++ b/src/timerfd.c
+@@ -1,5 +1,6 @@
+ #include <sys/timerfd.h>
+ 
++#include <sys/types.h>
+ #include <sys/event.h>
+ #include <sys/select.h>
+ #include <sys/stat.h>

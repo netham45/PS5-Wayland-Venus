@@ -1,0 +1,11 @@
+Rationale: Xcursor undefines POSIX_C_SOURCE for dirent extensions; FreeBSD requires _WITH_GETLINE to expose getline in that mode.
+--- a/xcursor/xcursor.c
++++ b/xcursor/xcursor.c
+@@ -25,6 +25,7 @@
+ 
+ #undef _POSIX_C_SOURCE
+ #define _DEFAULT_SOURCE // for d_type in struct dirent
++#define _WITH_GETLINE
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>

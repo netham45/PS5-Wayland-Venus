@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ $# == 0 ]]; then set -- bash; fi
+if [[ ${PS5WL_BUILD_ENV:-} == 1 ]]; then
+    exec "$@"
+fi
+command -v podman >/dev/null || { echo 'env/run requires rootless Podman' >&2; exit 1; }
+# Host Python only reads bootstrap metadata; all compilation runs in the image.
+readarray -t config < <(python3 - "$repo/env/env.lock.json" "$repo/env/Containerfile" <<'PY'
+import hashlib, json, pathlib, sys
+lock = pathlib.Path(sys.argv[1])
+config = json.loads(lock.read_text())
+print(config['image'])
+print(config['base_image'])
+print(config['archive_date'])
+print(hashlib.sha256(lock.read_bytes() + pathlib.Path(sys.argv[2]).read_bytes()).hexdigest())
+PY
+)
+[[ ${#config[@]} == 4 ]] || exit 1
+image=${config[0]}
+label=$(podman image inspect "$image" --format '{{index .Labels "org.ps5wl.environment"}}' 2>/dev/null || true)
+if [[ $label != "${config[3]}" ]]; then
+    podman build --network=host --build-arg "BASE_IMAGE=${config[1]}" \
+        --build-arg "ARCHIVE_DATE=${config[2]}" \
+        --label "org.ps5wl.environment=${config[3]}" \
+        --tag "$image" --file "$repo/env/Containerfile" "$repo/env"
+fi
+mkdir -p "$repo/.cache/home" "$repo/.cache/tmp"
+args=(run --rm --network=host --userns=keep-id --user "$(id -u):$(id -g)"
+      --volume "$repo:$repo" --workdir "$PWD"
+      --env "HOME=$repo/.cache/home" --env "XDG_CACHE_HOME=$repo/.cache"
+      --env "TMPDIR=$repo/.cache/tmp" --env PS5WL_BUILD_ENV=1
+      --env LLVM_CONFIG=/usr/bin/llvm-config
+      --env "PS5_PAYLOAD_SDK=${PS5_PAYLOAD_SDK:-$repo/.sdk}"
+      --env "PS5_HOST=${PS5_HOST:-192.168.3.211}"
+      --env "PLDMGR_PORT=${PLDMGR_PORT:-8084}")
+if [[ -t 0 && -t 1 ]]; then args+=(-it); fi
+exec podman "${args[@]}" "$image" "$@"

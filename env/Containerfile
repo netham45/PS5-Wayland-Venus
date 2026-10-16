@@ -1,0 +1,12 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG ARCHIVE_DATE
+# The base digest and package repository date are both supplied from env.lock.json.
+RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$ARCHIVE_DATE" > /etc/pacman.d/mirrorlist \
+ && pacman -Syyuu --noconfirm \
+ && pacman -S --needed --noconfirm base-devel clang llvm lld meson ninja cmake \
+      python python-pyelftools pkgconf git curl wget unzip zip patch file socat \
+      autoconf automake libtool gettext gperf bison flex \
+      python-mako python-yaml glslang spirv-tools spirv-llvm-translator libclc \
+ && pacman -Scc --noconfirm
+ENV PS5WL_BUILD_ENV=1 LLVM_CONFIG=/usr/bin/llvm-config

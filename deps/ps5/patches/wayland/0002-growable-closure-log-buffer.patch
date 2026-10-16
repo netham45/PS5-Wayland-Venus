@@ -1,0 +1,134 @@
+Rationale: PS5 lacks open_memstream/funopen; preserve complete closure diagnostics with a real growable buffer.
+--- a/src/connection.c
++++ b/src/connection.c
+@@ -43,6 +43,7 @@
+ #include "wayland-util.h"
+ #include "wayland-private.h"
+ #include "wayland-os.h"
++#include <ps5wl_log_buffer.h>
+ 
+ static inline uint32_t
+ div_roundup(uint32_t n, size_t a)
+@@ -1502,23 +1503,18 @@
+ 	struct timespec tp;
+ 	unsigned int time;
+ 	uint32_t nval;
+-	FILE *f;
+-	char *buffer;
+-	size_t buffer_length;
+-
+-	f = open_memstream(&buffer, &buffer_length);
+-	if (f == NULL)
+-		return;
++	struct ps5wl_log_buffer buffer = {0};
++
+ 
+ 	clock_gettime(CLOCK_REALTIME, &tp);
+ 	time = (tp.tv_sec * 1000000L) + (tp.tv_nsec / 1000);
+ 
+-	fprintf(f, "[%7u.%03u] ", time / 1000, time % 1000);
++	ps5wl_log_append(&buffer, "[%7u.%03u] ", time / 1000, time % 1000);
+ 
+ 	if (queue_name)
+-		fprintf(f, "{%s} ", queue_name);
+-
+-	fprintf(f, "%s%s%s#%u.%s(",
++		ps5wl_log_append(&buffer, "{%s} ", queue_name);
++
++	ps5wl_log_append(&buffer, "%s%s%s#%u.%s(",
+ 		discarded ? "discarded " : "",
+ 		send ? " -> " : "",
+ 		target->interface->name, target->id,
+@@ -1527,41 +1523,41 @@
+ 	for (i = 0; i < closure->count; i++) {
+ 		signature = get_next_argument(signature, &arg);
+ 		if (i > 0)
+-			fprintf(f, ", ");
++			ps5wl_log_append(&buffer, ", ");
+ 
+ 		switch (arg.type) {
+ 		case WL_ARG_UINT:
+-			fprintf(f, "%u", closure->args[i].u);
++			ps5wl_log_append(&buffer, "%u", closure->args[i].u);
+ 			break;
+ 		case WL_ARG_INT:
+-			fprintf(f, "%d", closure->args[i].i);
++			ps5wl_log_append(&buffer, "%d", closure->args[i].i);
+ 			break;
+ 		case WL_ARG_FIXED:
+ 			/* The magic number 390625 is 1e8 / 256 */
+ 			if (closure->args[i].f >= 0) {
+-				fprintf(f, "%d.%08d",
++				ps5wl_log_append(&buffer, "%d.%08d",
+ 					closure->args[i].f / 256,
+ 					390625 * (closure->args[i].f % 256));
+ 			} else {
+ 
+-				fprintf(f, "-%d.%08d",
++				ps5wl_log_append(&buffer, "-%d.%08d",
+ 					closure->args[i].f / -256,
+ 					-390625 * (closure->args[i].f % 256));
+ 			}
+ 			break;
+ 		case WL_ARG_STRING:
+ 			if (closure->args[i].s)
+-				fprintf(f, "\"%s\"", closure->args[i].s);
++				ps5wl_log_append(&buffer, "\"%s\"", closure->args[i].s);
+ 			else
+-				fprintf(f, "nil");
++				ps5wl_log_append(&buffer, "nil");
+ 			break;
+ 		case WL_ARG_OBJECT:
+ 			if (closure->args[i].o)
+-				fprintf(f, "%s#%u",
++				ps5wl_log_append(&buffer, "%s#%u",
+ 					closure->args[i].o->interface->name,
+ 					closure->args[i].o->id);
+ 			else
+-				fprintf(f, "nil");
++				ps5wl_log_append(&buffer, "nil");
+ 			break;
+ 		case WL_ARG_NEW_ID:
+ 			if (n_parse)
+@@ -1569,30 +1565,30 @@
+ 			else
+ 				nval = closure->args[i].n;
+ 
+-			fprintf(f, "new id %s#",
++			ps5wl_log_append(&buffer, "new id %s#",
+ 				(closure->message->types[i]) ?
+ 				 closure->message->types[i]->name :
+ 				  "[unknown]");
+ 			if (nval != 0)
+-				fprintf(f, "%u", nval);
++				ps5wl_log_append(&buffer, "%u", nval);
+ 			else
+-				fprintf(f, "nil");
++				ps5wl_log_append(&buffer, "nil");
+ 			break;
+ 		case WL_ARG_ARRAY:
+-			fprintf(f, "array[%zu]", closure->args[i].a->size);
++			ps5wl_log_append(&buffer, "array[%zu]", closure->args[i].a->size);
+ 			break;
+ 		case WL_ARG_FD:
+-			fprintf(f, "fd %d", closure->args[i].h);
++			ps5wl_log_append(&buffer, "fd %d", closure->args[i].h);
+ 			break;
+ 		}
+ 	}
+ 
+-	fprintf(f, ")\n");
+-
+-	if (fclose(f) == 0) {
+-		fprintf(stderr, "%s", buffer);
+-		free(buffer);
+-	}
++	ps5wl_log_append(&buffer, ")\n");
++
++	if (!buffer.failed) {
++		fprintf(stderr, "%s", buffer.data);
++	}
++	free(buffer.data);
+ }
+ 
+ static int
