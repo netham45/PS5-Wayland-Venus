@@ -1,0 +1,6 @@
+/build/
+/.sdk/
+/.cache/
+*.elf
+*.o
+__pycache__/
