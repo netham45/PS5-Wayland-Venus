@@ -24,6 +24,9 @@ int sceVideoOutAddFlipEvent(struct kevent *, int, void *);
 int sceVideoOutDeleteFlipEvent(struct kevent *, int);
 int sceVideoOutSetFlipRate(int, int);
 int sceVideoOutSubmitFlip(int, int, uint32_t, int64_t);
+/* PS5_Vulkan driver/ps5vk_private.h:1718-1721,1998ff: 16 u64 words,
+ * status[3] is the marker of the latest displayed flip (not PS4's struct). */
+int sceVideoOutGetFlipStatus(int, void *);
 void sceVideoOutSetBufferAttribute2(struct ps5_video_attr *, uint64_t, uint32_t,
  uint32_t, uint32_t, uint64_t, uint32_t, uint64_t);
 int sceVideoOutRegisterBuffers2(int, int, int, struct ps5_video_buffer *, int,

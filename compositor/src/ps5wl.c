@@ -4,6 +4,7 @@
  */
 #include <assert.h>
 #include <getopt.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -992,18 +993,24 @@ static void virtual_pointer_created(struct wl_listener *listener, void *data) {
 static int compositor_main(int argc, char *argv[]) {
 #ifdef PS5WL_PS5
 	if (ps5log_init("ps5wl-compositor", 9530)) return 1;
+	ps5log("compositor entry pid=%d uid=%d; initializing wlroots logger", getpid(), getuid());
+	ps5log_flush_wait(500);
 	wlr_log_init(WLR_INFO, payload_log);
+	ps5log("wlroots logger initialized");
 	setenv("XDG_RUNTIME_DIR", "/system_tmp", true);
 #else
 	wlr_log_init(WLR_DEBUG, NULL);
 #endif
+#ifdef PS5WL_PS5
+	/* elfldr payloads have no argc/argv contract; never call getopt on them. */
+	(void)argc;
+	(void)argv;
+	const char *backend = "ps5";
+	const char *socket_name = "/system_tmp/wayland-0";
+#else
 	char *startup_cmd = NULL;
 	const char *backend = getenv("PS5WL_BACKEND");
 	const char *socket_name = NULL;
-#ifdef PS5WL_PS5
-	backend = "ps5";
-	socket_name = "/system_tmp/wayland-0";
-#endif
 	if (backend == NULL) {
 		backend = getenv("WLR_BACKENDS");
 	}
@@ -1031,14 +1038,11 @@ static int compositor_main(int argc, char *argv[]) {
 		}
 	}
 	if (optind < argc ||
-#ifdef PS5WL_PS5
-			strcmp(backend, "ps5") != 0) {
-#else
 			(strcmp(backend, "headless") != 0 && strcmp(backend, "wayland") != 0)) {
-#endif
 		fprintf(stderr, "Invalid backend or positional arguments\n");
 		return 1;
 	}
+#endif
 	if (setenv("WLR_BACKENDS", backend, true) < 0 ||
 			(getenv("WLR_RENDERER") == NULL && setenv("WLR_RENDERER", "pixman", true) < 0)) {
 		perror("setenv");
@@ -1046,12 +1050,19 @@ static int compositor_main(int argc, char *argv[]) {
 	}
 
 	struct tinywl_server server = {0};
+#ifdef PS5WL_PS5
+	ps5log("creating Wayland display");
+#endif
 	/* The Wayland display is managed by libwayland. It handles accepting
 	 * clients from the Unix socket, managing Wayland globals, and so on. */
 	server.wl_display = wl_display_create();
 	if (server.wl_display == NULL) {
+		wlr_log(WLR_ERROR, "wl_display_create failed errno=%d (%s)", errno, strerror(errno));
 		return 1;
 	}
+#ifdef PS5WL_PS5
+	ps5log("Wayland display created");
+#endif
 	struct wl_event_loop *loop = wl_display_get_event_loop(server.wl_display);
 	struct wl_event_source *sigint = wl_event_loop_add_signal(loop, SIGINT,
 		terminate_display, server.wl_display);

@@ -29,7 +29,8 @@ tools/ps5ctl logs --port 9591
 ```
 
 The smoke enumerates a physical device and its host-visible memory types,
-creates a graphics queue, fills a 64-KiB Vulkan buffer on that queue, waits
+creates a graphics queue, clears an optimal-tiled 128×128 `R32_UINT` image
+on that queue, copies it to a 64-KiB host-visible Vulkan buffer, waits
 for a fence, invalidates host caches, and checks all 16,384 readback words
 against `0x1a2b3c4d`. Acceptance requires `mismatches=0` and `RESULT PASS` from
 the console, not merely successful device creation. It creates no surface
@@ -47,7 +48,7 @@ tools/ps5ctl logs --port 9590
 
 The payload defaults to 300 frames, logs the first and every 60th successful
 present, releases its Vulkan/Wayland objects, and lingers for 30 seconds for
-log pulls. It shares `/system_tmp/ps5wl/libvulkan.so.1` with the smoke; never
+log pulls. It shares `/data/ps5wl/libvulkan.so.1` with the smoke; never
 run two differently built driver payloads concurrently. The compositor uses
 pixman and owns VideoOut; the client builds only the Wayland WSI platform.
 Compare client presents with the compositor's surface commit/output frame
@@ -62,6 +63,12 @@ client logs show `vkcube presented frame=120` and
 `Created shm allocator`, pixman renderer, and
 `client surface committed 500x500 count=120`. Both processes exited cleanly.
 The test completed in 33.05 seconds including its log-pull linger.
+
+Observed host image-clear acceptance (exit 0): `ps5wl-vktest` reports
+`GPU readback words=16384 expected=1a2b3c4d first=1a2b3c4d mismatches=0`
+and `RESULT PASS` using the same llvmpipe driver. This checks optimal-image
+clear, image-to-buffer copy, fence completion, and CPU-visible data; it does
+not establish PS5 hardware execution.
 
 Console GPU/cube acceptance is not yet established by these host results.
 

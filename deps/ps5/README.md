@@ -108,7 +108,8 @@ env/run build/ps5/test-getline
 ## Link/runtime check
 
 `deps/ps5/linktest/build.sh` links `build/ps5/linktest/linktest.elf` using
-`prospero-clang` and static pkg-config metadata. It calls `wlr_log_init`, creates
+`prospero-clang` and static pkg-config metadata. It checks `wlr_log_init`,
+environment lookup, standalone event-loop creation/destruction, creates
 a Wayland display, dispatches its event loop with timeout zero, destroys it,
 and logs the actual result through `common/ps5log` on TCP port 9531. It waits ten
 seconds for a pull client. Deployment and console output are separate evidence;

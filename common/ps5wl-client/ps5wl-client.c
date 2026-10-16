@@ -24,7 +24,7 @@ int ps5wl_client_init(const char *name, uint16_t port) {
         setenv("WAYLAND_DISPLAY", "/system_tmp/wayland-0", 1) < 0) return -1;
 #endif
     /* wl_keyboard supplies a serialized keymap: clients need no XKB data files. */
-    ps5log("client-init name=%s display=%s runtime=%s", name,
+    ps5log("client-init name=%s pid=%ld display=%s runtime=%s", name, (long)getpid(),
         getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "wayland-0",
         getenv("XDG_RUNTIME_DIR") ? getenv("XDG_RUNTIME_DIR") : "(unset)");
     return 0;
@@ -50,6 +50,10 @@ struct wl_display *ps5wl_client_connect(unsigned timeout_ms) {
         nanosleep(&delay, NULL);
     } while (1);
     ps5log("wayland-connect-failed: %s", strerror(errno));
+#if defined(PS5WL_PS5) || defined(__FreeBSD__)
+    /* Otherwise process exit can discard the final pull-log line. */
+    ps5log_flush_wait(1500);
+#endif
     return NULL;
 }
 

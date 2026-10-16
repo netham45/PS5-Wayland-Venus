@@ -55,7 +55,7 @@ and the physical TV/input check as well.
 
 On 2026-10-16, `env/run clients/build.sh host`, `env/run clients/build.sh ps5`,
 and `env/run python3 clients/tests/smoke.py` each exited 0 using LLVM 23.1.1
-and Meson 1.12.1. The latest host run completed 93 simple-shm frames and 92 demo frames, exiting with
+and Meson 1.12.1. Host acceptance runs completed at least 90 frames per client, exiting with
 `failed=0`. Each received compositor-supplied XKB keymaps, pointer button 272,
 and key 30 (`a`). Demo logs recorded drag `(400,300)` to `(500,350)`,
 `demo-text bytes=1 text=a`, fullscreen `1280x720`, then restored `800x600`.
@@ -65,3 +65,12 @@ pixels in the typed `a` glyph cell; explicit assertions catch input that logs
 correctly but fails to draw. Logs and screenshots are in the generated evidence directory
 described above. These host results and successful PS5 linking do not establish
 console rendering or physical input; console evidence must be recorded separately.
+
+The initial console run uploaded and launched both client ELFs successfully through
+`tools/ps5ctl`. Ports 9560/9561 returned `client-init` with the correct PS5 socket
+and runtime paths. A diagnostic simple-shm run (PID 129) logged
+`wayland-connect-failed: No such file or directory` after 30.043 seconds;
+the compositor had not created its socket. No console connection or buffer commit
+is claimed from that run. The helper now logs its PID and lingers after connect
+failure so the final pull-log error is not lost. The diagnostic process exited;
+no unrelated process was killed.

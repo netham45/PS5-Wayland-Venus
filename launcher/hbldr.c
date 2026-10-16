@@ -91,7 +91,7 @@ int sceSystemServiceLaunchApp(const char* title_id, char** argv,
 
 
 static int
-remount_system_ex(int flags) {
+remount_system_ex(void) {
   struct iovec iov[] = {
     IOVEC_ENTRY("from"),      IOVEC_ENTRY("/dev/ssd0.system_ex"),
     IOVEC_ENTRY("fspath"),    IOVEC_ENTRY("/system_ex"),
@@ -100,20 +100,10 @@ remount_system_ex(int flags) {
     IOVEC_ENTRY("timezone"),  IOVEC_ENTRY("static"),
     IOVEC_ENTRY("async"),     IOVEC_ENTRY(NULL),
     IOVEC_ENTRY("ignoreacl"), IOVEC_ENTRY(NULL),
-    /* FreeBSD releng/11.0 sys/kern/vfs_mount.c:192,225,635-640,944:
-     * explicitly replace inherited "ro" when upgrading an nmount mount. */
-    IOVEC_ENTRY((flags & MNT_RDONLY) ? "ro" : "noro"), IOVEC_ENTRY(NULL),
   };
 
-  int result=nmount(iov, IOVEC_SIZE(iov), MNT_UPDATE | flags);
-  ps5log("nmount system_ex flags=0x%x result=%d errno=%d", flags, result, errno);
-  struct statfs current;
-  const char *paths[]={"/system_ex",FAKE_PATH};
-  for(size_t i=0;i<2;i++) {
-    if(!statfs(paths[i],&current))
-      ps5log("statfs %s flags=0x%lx type=%s mount=%s from=%s",paths[i],
-             (unsigned long)current.f_flags,current.f_fstypename,current.f_mntonname,current.f_mntfromname);
-  }
+  int result=nmount(iov, IOVEC_SIZE(iov), MNT_UPDATE);
+  ps5log("nmount system_ex writable result=%d errno=%d", result, errno);
   if(result) return -1;
 
   return 0;
@@ -448,21 +438,15 @@ hbldr_launch(const char*cwd, const char* path, int stdio, char** argv,
     return -1;
   }
 
-  struct statfs mount_info;
-  if(statfs("/system_ex", &mount_info)) return -1;
-  int was_readonly = (mount_info.f_flags & MNT_RDONLY) != 0;
-  if(was_readonly && remount_system_ex(0)) {
-    perror("remount_system_ex writable");
-    return -1;
-  }
-  int created = fakeapp_create_if_missing();
-  if(was_readonly && remount_system_ex(MNT_RDONLY)) {
-    perror("restoring system_ex readonly");
-    return -1;
-  }
-  if(created) {
-    perror("fakeapp_create_if_missing");
-    return -1;
+  if(fakeapp_create_if_missing()) {
+    if(remount_system_ex()) {
+      perror("remount_system_ex");
+      return -1;
+    }
+    if(fakeapp_create_if_missing()) {
+      perror("fakeapp_create_if_missing");
+      return -1;
+    }
   }
 
 
@@ -494,11 +478,7 @@ hbldr_launch(const char*cwd, const char* path, int stdio, char** argv,
 int hbldr_remove(void) {
   struct stat st;
   if(stat(FAKE_PATH, &st)) return errno == ENOENT ? 0 : -1;
-  struct statfs mount_info;
-  if(statfs("/system_ex", &mount_info)) return -1;
-  int was_readonly = (mount_info.f_flags & MNT_RDONLY) != 0;
-  ps5log("remove BigApp mount flags=0x%lx readonly=%d", (unsigned long)mount_info.f_flags, was_readonly);
-  if(was_readonly && remount_system_ex(0)) {
+  if(remount_system_ex()) {
     perror("remove BigApp remount writable");
     return -1;
   }
@@ -511,7 +491,6 @@ int hbldr_remove(void) {
   }
   if(rmdir(FAKE_PATH "/sce_sys") && errno != ENOENT) { perror("remove BigApp sce_sys"); rc = -1; }
   if(rmdir(FAKE_PATH) && errno != ENOENT) { perror("remove BigApp root"); rc = -1; }
-  if(was_readonly && remount_system_ex(MNT_RDONLY)) { perror("remove BigApp restore readonly"); rc = -1; }
   ps5log("remove BigApp directory rc=%d errno=%d", rc, errno);
   return rc;
 }

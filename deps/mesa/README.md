@@ -41,7 +41,7 @@ behavior. Shm allocation failure is returned, not asserted or presented.
 
 The PS5 driver follows pacbrew's shared `libvulkan.so.1` model and exports
 Vulkan entrypoints itself; no Vulkan loader is needed. Each payload embeds
-the driver and extracts it to `/system_tmp/ps5wl/libvulkan.so.1` before the
+the driver and extracts it to `/data/ps5wl/libvulkan.so.1` before the
 SDK rtld opens it. This keeps deployment a single ELF while retaining the
 recipe's shared-library ABI. Both clients must be built from the same tree;
 do not replace the driver while another Vulkan client is running.

@@ -98,7 +98,7 @@
 -    if (library == NULL) library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
 +    const char *path = getenv("PS5WL_VULKAN_LIBRARY");
 +#ifdef PS5WL_PS5
-+    if (!path) path = "/system_tmp/ps5wl/libvulkan.so.1";
++    if (!path) path = "/data/ps5wl/libvulkan.so.1";
 +#else
 +    if (!path) path = "libvulkan.so.1";
 +#endif

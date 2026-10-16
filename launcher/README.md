@@ -21,6 +21,24 @@ tools/ps5ctl run launcher/ps5wl-install.elf
 tools/ps5ctl logs --port 9580 --retry 30
 ```
 
+After a coordinator-approved reboot and restart of the existing jailbreak,
+elfldr and Payload Manager, the complete bounded foreground test is one command:
+
+```sh
+launcher/test.sh
+# Optional launch-only diagnostic instead of rebuilding the compositor:
+launcher/test.sh --probe
+```
+
+The default command builds the compositor with `PS5WL_TEST_SECONDS=60`, bundles
+it as `/data/ps5wl/bin/ps5wl-compositor.elf`, installs the icon, invokes the
+same loopback launch handler, and captures launcher plus compositor logs. It
+refuses to run while old launcher/uninstaller/probe processes are listed, never
+kills console processes, and treats a payload log stream which fails to close
+within 75 seconds as a failed bounded test. It leaves the resident installer
+available for the final integrated icon/keyboard/mouse session. The host script
+has not been run against the paused, pre-reboot console.
+
 Wait for `register ... rc=0x0`, `install result=0`, and `ready` in the logs.
 Select **PS5 Wayland** on the PS5 home screen. The browser loads a local page,
 then the foreground app should take over. Pull probe logs with:
@@ -68,10 +86,11 @@ startup integration.
 - 9580: pull logs. 9581: HTTP, bound to `127.0.0.1` only. 9582: diagnostic
   foreground payload logs. 9583: optional loopback test payload logs.
 
-`/system_ex` is temporarily remounted writable if originally read-only, then
-its original read-only state is restored. The loader uses kernel credentials,
-ptrace, and firmware-dependent signed-entry initialization inherited from
-websrv; this is not a portable retail application.
+The loader mirrors websrv's read/write remount sequence for `/system_ex` when
+creating/removing the unique BigApp container. Like websrv, it does **not** try
+to restore a read-only mount: hardware testing found that downgrade/upgrade
+cycles were unsafe. It uses kernel credentials, ptrace, and firmware-dependent
+signed-entry initialization; this is not a portable retail application.
 
 ## Uninstall
 
@@ -126,7 +145,7 @@ system launch services. It logs the prior authid and effective UID.
 
 `vendor/{elfldr,pt}.{c,h}`, `hbldr.{c,h}` derive from that pinned websrv revision,
 Copyright John Törnblom, GPL-3.0-or-later; see `COPYING`. The local hbldr changes
-use project-specific IDs, preserve mount state, refuse to kill another app,
+use project-specific IDs, refuse to kill another app,
 bound child-event waiting, log launch results, fix failed-launch allocations,
 and provide explicit cleanup. Other launcher code is GPL-3.0-or-later too.
 
@@ -167,10 +186,56 @@ using its known injected PID. The diagnostic now calls `_exit(0)` at 60 seconds;
 compositor shutdown must likewise terminate the signed process after releasing
 its rendering resources, not merely return from the injected payload thread.
 
-The first uninstall exposed `EROFS` after a successful read/write remount call.
-The helper explicitly supplies `noro` for writes and `ro` when restoring the
-original state, matching option normalization/merge in
-[FreeBSD vfs_mount.c](https://github.com/freebsd/freebsd-src/blob/releng/11.0/sys/kern/vfs_mount.c#L192-L227).
-Hardware diagnostics are checking why this console still reports the created
-BigApp path read-only; the cleanup result below, not a successful `nmount` call
-alone, determines whether uninstall has succeeded.
+An early implementation tried restoring `/system_ex` read-only after creation.
+Subsequent read/write remounts returned success but writes failed `EROFS`; one
+further read-only update hung and its receipt-owned uninstall process was
+stopped. Those restore/noro experiments were removed. The final implementation
+uses websrv's exact read/write remount iovec/options and never downgrades the
+system partition. If cleanup still reports `EROFS` on this already-affected
+session, reboot/re-establish the jailbreak before rerunning the uninstaller.
+The only system-partition additions needing removal are:
+
+```text
+/system_ex/app/PSWL00002/eboot.bin
+/system_ex/app/PSWL00002/sce_sys/param.json
+/system_ex/app/PSWL00002/sce_sys/   (empty directory)
+/system_ex/app/PSWL00002/           (empty directory)
+```
+
+Do not remove the original `/system_ex/app/NPXS40106` application or alter
+system processes to work around a remount failure.
+
+### State left when console actions were paused
+
+- `pid=107`, name `ps5wl-launch-probe`: owned signed BigApp diagnostic, originally
+  app ID `0x19`. It finished logging tick 59 but remained listed. Payload Manager
+  acknowledged SIGKILL, yet a later process-list recheck still listed it. It
+  **never opened VideoOut**, so it has no diagnostic-owned VideoOut handle;
+  whether its application slot is still foreground was not queried after the
+  pause. Do not kill it as a prerequisite for another component's tests.
+- `pid=124`, name `ps5wl-uninstall.elf`: owned uninstall process stopped logging
+  during a read-only remount operation. Payload Manager acknowledged SIGKILL,
+  but the subsequent process-list recheck still listed it. Its old log ring
+  continued to answer on 9580. A successful manager kill response was therefore
+  not proof that this process exited.
+- Last observed `/system_ex` and `/system_ex/app/PSWL00002` mount flags were
+  `0x1041` (`MNT_RDONLY` set), type `exfatfs`, source `/dev/ssd0.system_ex`.
+  Read/write nmount returned `0` while subsequent unlink returned `EROFS` (`30`).
+  Final code was reverted to the exact shipping websrv read/write-only path;
+  no further read-only restore attempts are made.
+- The two files and two directories listed immediately above remain the known
+  system-partition residue. Early uninstall calls successfully unregistered
+  `PSWL00001` (`rc=0`) and reported no error removing the user/data-side files.
+  A final installer upload/run was accepted immediately before the pause, but
+  its install logs were not observed because old pid124 still held 9580. Do
+  **not** infer that the icon is presently registered or that its new target is
+  installed merely from that upload acknowledgement.
+
+A reboot releases the stuck processes and their kernel/application state; it
+does **not** delete the persistent `PSWL00002` files. Re-establish the console's
+existing jailbreak/autoloader so elfldr and Payload Manager are serving again.
+No Payload Manager startup/config changes were made by this project. Then run
+`launcher/test.sh` to install the real compositor bundle and exercise its
+foreground route, or run `ps5wl-uninstall.elf` as documented above if removing
+the project. The final rw-only cleanup path and `_exit` diagnostic correction
+still need that fresh-session hardware run; no post-reboot result is claimed.

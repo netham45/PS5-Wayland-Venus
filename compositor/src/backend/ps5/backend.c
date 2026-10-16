@@ -154,6 +154,10 @@ static int flip_ready(int fd, uint32_t mask, void *data) {
    (msg.when.tv_nsec - b->first_flip.tv_nsec) / 1e9;
   ps5log("VideoOut flip complete count=%llu elapsed=%.3f rate=%.2fHz", 
    (unsigned long long)b->flips, elapsed, elapsed > 0 ? (b->flips - 1) / elapsed : 0);
+  uint64_t status[16] = {0};
+  int rc = sceVideoOutGetFlipStatus(b->video, status);
+  ps5log("VideoOut GetFlipStatus rc=%#x displayed_marker=%llu expected=%llu",
+   rc, (unsigned long long)status[3], (unsigned long long)b->flips);
  }
  wlr_output_send_frame(&b->output);
  /* Keep the hardware clock alive even when the scene has no damage. Re-flip

@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 import re
 import socket
 import sys
+import tempfile
 import time
 from urllib.parse import quote, urlencode
 
@@ -188,7 +189,7 @@ def logs(host, port, retry):
 def screenshot(host, port, retry, output):
     """Pull the compositor's completed scanout PNG (not system overlays)."""
     output = Path(output)
-    temporary = output.with_name(output.name + ".part")
+    temporary = None
     try:
         with connect_stream(host, port, retry) as connection:
             connection.settimeout(15)
@@ -196,13 +197,19 @@ def screenshot(host, port, retry, output):
                 signature = source.read(8)
                 if signature != b"\x89PNG\r\n\x1a\n":
                     raise Error(f"Screenshot endpoint returned invalid PNG signature: {signature!r}")
-                with temporary.open("wb") as destination:
+                with tempfile.NamedTemporaryFile(dir=output.parent, prefix=output.name + ".", delete=False) as destination:
+                    temporary = Path(destination.name)
                     destination.write(signature)
+                    trailer = signature
                     while data := source.read(65536):
                         destination.write(data)
+                        trailer = data[-12:] if len(data) >= 12 else (trailer + data)[-12:]
+                    if trailer != b"\0\0\0\0IEND\xaeB\x60\x82":
+                        raise Error("Screenshot connection closed before PNG IEND")
         temporary.replace(output)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     print(f"Saved {output} ({output.stat().st_size} bytes)")
 
 

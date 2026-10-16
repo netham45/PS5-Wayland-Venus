@@ -54,7 +54,7 @@ def main():
     common = ['-O2', '-g', '-I' + str(cube), '-I' + str(binary),
               '-I' + str(ROOT / 'build/mesa/sources' / mesa.PINS['mesa']['source_dir'] / 'include'),
               '-I' + str(ROOT / 'common/ps5log'), '-I' + str(ROOT / 'common/ps5wl-client')]
-    libs = ['-lm', '-pthread']
+    libs = ['-pthread']
     if target == 'ps5':
         common += ['-DPS5WL_PS5=1', '-I' + str(prefix / 'include')]
         library = prefix / 'lib/libvulkan.so.1'
@@ -63,7 +63,7 @@ def main():
                   'radv.so', 'radv.o'], cwd=binary)
         libs += [binary / 'radv.o', '-lSceAgc', '-lSceAgcDriver']
     else:
-        libs += ['-ldl']
+        libs += ['-lm', '-ldl']
     runtime = [ROOT / 'clients/vkcube/runtime.c', ROOT / 'common/ps5log/ps5log.c']
     mesa.run([compiler] + common + [ROOT / 'clients/vkcube/vktest.c'] + runtime + libs +
              ['-o', binary / ('ps5wl-vktest.elf' if target == 'ps5' else 'ps5wl-vktest')], env=env)

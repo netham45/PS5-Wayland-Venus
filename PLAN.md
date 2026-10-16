@@ -17,6 +17,20 @@ Every claim about the console is either cited evidence or marked
   `shm_open(SHM_ANON)`+`mmap(MAP_SHARED)` OK, page size 16384; jail status
   unprobed. A home-screen entry triggers it (pldmgr-style
   launcher app or a stub title that streams the ELF to `127.0.0.1:9021`).
+- **Probe verdicts (firmware 10.60, `probes/RESULTS.md`):** between two payloads,
+  AF_UNIX on `/system_tmp` + SCM_RIGHTS work and 32 MiB `SHM_ANON`/named shm
+  is coherent both ways (file-backed MAP_SHARED in /system_tmp fails ENOSPC at
+  32 MiB); `LOCAL_PEERCRED` works; `getpeereid`/`accept4` absent;
+  `SOCK_CLOEXEC`/`MSG_CMSG_CLOEXEC` silently don't set FD_CLOEXEC (explicit
+  fcntl). Payload→payload spawn via `127.0.0.1:9021` works (raw ELF and
+  `file:` URI). kqueue, poll, pipe, socketpair, sce equeue→socketpair bridge
+  and epoll-shim (eventfd/timerfd/signalfd) work after binding `ppoll`
+  statically.
+- **GPU in a payload (2026-10-16):** pinned Mesa RADV built as a payload
+  `.so` (`deps/mesa/`), stored under `/data/ps5wl`, ran a clear + readback on
+  "PlayStation 5 GPU (RADV NAVI21)", Vulkan 1.4.354, 0 mismatches, without
+  VideoOut. `/system_tmp` is tiny (ENOSPC after 256 KiB writes): sockets only;
+  large files go under `/data/ps5wl`.
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.

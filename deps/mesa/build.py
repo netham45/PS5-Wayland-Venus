@@ -119,6 +119,10 @@ def main():
     binary = configure(target, src, options, env)
     run(['meson', 'compile', '-C', binary, '-j', JOBS], env=env)
     run(['meson', 'install', '-C', binary, '--no-rebuild'], env=env)
+    if target == 'ps5':
+        metadata = prefix / 'libdata/pkgconfig/vulkan.pc'
+        if metadata.exists():
+            metadata.replace(prefix / 'lib/pkgconfig/vulkan.pc')
 
 
 if __name__ == '__main__':

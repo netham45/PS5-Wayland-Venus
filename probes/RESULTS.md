@@ -223,6 +223,17 @@ Here signalfd's low 32-bit signal number is 30, the SDK's `SIGUSR1`;
 shim pulls reached EOF after their bounded log linger. The shim results
 were immediately sent to Ps5Deps, Ps5Backend and Clients.
 
+A final relink/run (PID 126) also tested the temporary signal-mask path
+through `epoll_pwait`, with no remaining events. It returned zero and restored
+the caller's original blocked SIGUSR1 mask; the same run again passed all
+three emulated descriptor tests:
+
+```text
+[16659462 ms] probe-events-shim: shim kind=2 read=128 first_u64=30
+[16659462 ms] probe-events-shim: epoll_pwait temporary empty mask rc=0 errno=0 query_rc=0 SIGUSR1_restored_blocked=1
+[16659462 ms] probe-events-shim: events probe complete
+```
+
 ## 4–5. VideoOut and input
 
 **Verdict: removed from probe scope by coordinator directive.** Shipping SDL

@@ -2,10 +2,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "cube_functions.h"
 #include "ps5log.h"
 extern int ps5wl_vulkan_install(void);
-static PFN_vkCmdFillBuffer test_vkCmdFillBuffer;
+static PFN_vkCmdClearColorImage test_vkCmdClearColorImage;
+static PFN_vkCmdCopyImageToBuffer test_vkCmdCopyImageToBuffer;
 static PFN_vkInvalidateMappedMemoryRanges test_vkInvalidateMappedMemoryRanges;
 
 #define VK_CHECK(expr) do { VkResult r = (expr); if (r != VK_SUCCESS) { \
@@ -16,11 +18,13 @@ int main(void) {
     VkDevice device = VK_NULL_HANDLE;
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory image_memory = VK_NULL_HANDLE;
     VkCommandPool pool = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     int status = 1;
     ps5log_init("ps5wl-vktest", 9591);
-    ps5log("starting RADV GPU smoke (no surface, no VideoOut)");
+    ps5log("starting RADV GPU smoke pid=%d (no surface, no VideoOut)", getpid());
     if (ps5wl_vulkan_install() || load_vulkan_library() != VK_SUCCESS) {
         ps5log("FAIL loading RADV library");
         goto fail;
@@ -59,10 +63,12 @@ int main(void) {
         .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci};
     VK_CHECK(vkCreateDevice(physical, &dci, NULL, &device));
     load_vulkan_device_functions(device);
-    test_vkCmdFillBuffer = (PFN_vkCmdFillBuffer)vkGetDeviceProcAddr(device, "vkCmdFillBuffer");
+    test_vkCmdClearColorImage = (PFN_vkCmdClearColorImage)vkGetDeviceProcAddr(device, "vkCmdClearColorImage");
+    test_vkCmdCopyImageToBuffer = (PFN_vkCmdCopyImageToBuffer)vkGetDeviceProcAddr(device, "vkCmdCopyImageToBuffer");
     test_vkInvalidateMappedMemoryRanges = (PFN_vkInvalidateMappedMemoryRanges)
         vkGetDeviceProcAddr(device, "vkInvalidateMappedMemoryRanges");
-    if (!test_vkCmdFillBuffer || !test_vkInvalidateMappedMemoryRanges) goto fail;
+    if (!test_vkCmdClearColorImage || !test_vkCmdCopyImageToBuffer ||
+        !test_vkInvalidateMappedMemoryRanges) goto fail;
     VkQueue queue;
     vkGetDeviceQueue(device, family, 0, &queue);
     VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -83,6 +89,22 @@ int main(void) {
         .allocationSize = req.size, .memoryTypeIndex = type};
     VK_CHECK(vkAllocateMemory(device, &mai, NULL, &memory));
     VK_CHECK(vkBindBufferMemory(device, buffer, memory, 0));
+    VkImageCreateInfo image_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R32_UINT,
+        .extent = {128, 128, 1}, .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    VK_CHECK(vkCreateImage(device, &image_info, NULL, &image));
+    vkGetImageMemoryRequirements(device, image, &req);
+    type = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+        if (req.memoryTypeBits & (1u << i)) { type = i; break; }
+    if (type == UINT32_MAX) goto fail;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = type;
+    VK_CHECK(vkAllocateMemory(device, &mai, NULL, &image_memory));
+    VK_CHECK(vkBindImageMemory(device, image, image_memory, 0));
     VkCommandPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = family};
     VK_CHECK(vkCreateCommandPool(device, &pci, NULL, &pool));
     VkCommandBuffer command;
@@ -91,7 +113,26 @@ int main(void) {
     VK_CHECK(vkAllocateCommandBuffers(device, &cai, &command));
     VkCommandBufferBeginInfo cbi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     VK_CHECK(vkBeginCommandBuffer(command, &cbi));
-    test_vkCmdFillBuffer(command, buffer, 0, 65536, 0x1a2b3c4d);
+    VkImageSubresourceRange subresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .levelCount = 1, .layerCount = 1};
+    VkImageMemoryBarrier image_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image, .subresourceRange = subresource};
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, NULL, 0, NULL, 1, &image_barrier);
+    VkClearColorValue clear = {.uint32 = {0x1a2b3c4d, 0, 0, 0}};
+    test_vkCmdClearColorImage(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &subresource);
+    image_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    image_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    image_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    image_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, NULL, 0, NULL, 1, &image_barrier);
+    VkBufferImageCopy copy = {.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1},
+        .imageExtent = {128, 128, 1}};
+    test_vkCmdCopyImageToBuffer(command, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &copy);
     VkMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
@@ -120,6 +161,8 @@ fail:
         if (fence) vkDestroyFence(device, fence, NULL);
         if (pool) vkDestroyCommandPool(device, pool, NULL);
         if (buffer) vkDestroyBuffer(device, buffer, NULL);
+        if (image) vkDestroyImage(device, image, NULL);
+        if (image_memory) vkFreeMemory(device, image_memory, NULL);
         if (memory) vkFreeMemory(device, memory, NULL);
         vkDestroyDevice(device, NULL);
     }
