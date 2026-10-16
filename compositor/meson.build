@@ -22,7 +22,12 @@ if meson.is_cross_build()
     'src/backend/ps5/safety.c', '../common/ps5log/ps5log.c']
   includes += include_directories('../common/ps5log')
   cc = meson.get_compiler('c')
-  foreach lib : ['SceVideoOut', 'SceSystemService', 'SceUserService', 'SceKeyboard', 'ScePad', 'SceSysmodule']
+  mouse_import = shared_library('SceMouse', 'src/backend/ps5/mouse-stub.c',
+    c_args: ['-ffreestanding', '-fno-builtin'],
+    link_args: ['-nostdlib', '-nodefaultlibs', '-nostartfiles',
+      '-Wl,-soname,libSceMouse.sprx'], install: false)
+  deps += declare_dependency(link_with: mouse_import)
+  foreach lib : ['SceVideoOut', 'SceSystemService', 'SceUserService', 'SceKeyboard', 'ScePad']
     deps += cc.find_library(lib)
   endforeach
   deps += dependency('threads')

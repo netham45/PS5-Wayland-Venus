@@ -8,6 +8,12 @@ env/run clients/build.sh ps5
 env/run python3 clients/tests/smoke.py
 ```
 
+The PS5 wrapper bootstraps the shared descriptor compatibility runtime and
+fingerprints the cross/native files, compiler proxy, and injected compatibility
+archive. A changed toolchain identity wipes only the generated client Meson
+configuration: ordinary `--reconfigure` would retain the old compiler path and
+could silently bypass the PS5 descriptor fixes.
+
 The host test requires `env/run compositor/build.sh host` and the host dependency
 sources in `build/host/sources/wlroots-0.20.2` (the protocol XMLs come from the
 same pinned wlroots source as the compositor). It starts ps5wl headless, launches
@@ -38,7 +44,9 @@ The screen shows coordinates, frame/time, typed text, and the last 12 key/button
 events. The embedded [8x8 Basic Latin bitmap font](https://github.com/dhepper/font8x8)
 is public domain (Daniel Hepper, Marcel Sondaar, IBM); non-Latin codepoints are retained in the text buffer and
 rendered as `?`. No fontconfig, installed fonts, or client-side XKB data is needed:
-the keyboard keymap and modifier state come from the compositor.
+the keyboard keymap and modifier state come from the compositor. The client XKB
+context explicitly uses `XKB_CONTEXT_NO_DEFAULT_INCLUDES`, so missing installation
+paths cannot prevent a payload from parsing the self-contained serialized keymap.
 
 PS5 deployment uses only `tools/ps5ctl run <ELF>` after the compositor is running.
 The common helper initializes pull logging and sets `XDG_RUNTIME_DIR=/system_tmp`
@@ -55,22 +63,40 @@ and the physical TV/input check as well.
 
 On 2026-10-16, `env/run clients/build.sh host`, `env/run clients/build.sh ps5`,
 and `env/run python3 clients/tests/smoke.py` each exited 0 using LLVM 23.1.1
-and Meson 1.12.1. Host acceptance runs completed at least 90 frames per client, exiting with
-`failed=0`. Each received compositor-supplied XKB keymaps, pointer button 272,
-and key 30 (`a`). Demo logs recorded drag `(400,300)` to `(500,350)`,
-`demo-text bytes=1 text=a`, fullscreen `1280x720`, then restored `800x600`.
-All six 1280x720 screencopies were nonuniform; before/after hashes changed for
-both clients. The demo capture contained 149 orange trail pixels and 80 white
-pixels in the typed `a` glyph cell; explicit assertions catch input that logs
-correctly but fails to draw. Logs and screenshots are in the generated evidence directory
-described above. These host results and successful PS5 linking do not establish
-console rendering or physical input; console evidence must be recorded separately.
+and Meson 1.12.1. The final PS5 configure used
+`cross/bin/prospero-clang`; inspection of both actual ELFs confirmed the linked
+descriptor wrappers, including `__wrap_fcntl`, `__wrap_shm_open`, and `__wrap_recvmsg`.
 
-The initial console run uploaded and launched both client ELFs successfully through
-`tools/ps5ctl`. Ports 9560/9561 returned `client-init` with the correct PS5 socket
-and runtime paths. A diagnostic simple-shm run (PID 129) logged
-`wayland-connect-failed: No such file or directory` after 30.043 seconds;
-the compositor had not created its socket. No console connection or buffer commit
-is claimed from that run. The helper now logs its PID and lingers after connect
-failure so the final pull-log error is not lost. The diagnostic process exited;
-no unrelated process was killed.
+Host acceptance completed 90 frames per client with `failed=0`, while client
+`XKB_CONFIG_ROOT` deliberately pointed to a nonexistent directory. Both received
+compositor-supplied XKB keymaps, pointer button 272, and key 30 (`a`). The demo
+recorded drag `(400,300)` to `(500,350)`, typed `a`, fullscreen `1280x720`, and
+restoration to `800x600`. Six real 1280x720 screencopies were nonuniform and
+before/after hashes changed. The input screenshot contained 149 trail pixels and
+80 pixels in the typed glyph cell, so logging alone cannot satisfy the test.
+
+On PS5, foreground compositor PID 132 accepted separate simple-shm PID 133 and
+demo PID 134. Each mapped 8,294,400-byte SHM pools, configured `1920x1080`, received
+a 68,214-byte keyboard keymap and keyboard focus, and repeatedly committed buffers.
+Client logs prove at least 600 simple-shm and 720 demo frame callbacks. The
+compositor independently recorded the corresponding surface commits in
+`build/ps5/evidence/compositor-fd-fixed.log`.
+
+Actual completed-scanout PNGs, client logs, and measured results are saved under
+`build/ps5/evidence/clients/` (`simple-shm.png`, `demo.png`, both `.log` files,
+and `acceptance.json`). Both 1920x1080 RGB PNGs passed chunk-CRC/DEFLATE checks;
+the simple-shm image shows the colored animated pattern and the demo image shows
+its checkerboard and readable bitmap text. Pixel checks verified the demo's two
+background colors and 2,000 title-colored glyph pixels. These are compositor
+scanout captures, not captures of system overlays or the physical HDMI output.
+Both receipt-launched clients were stopped using their exact logged PIDs;
+both cleanup operations returned success.
+
+The captured regressions also established why clients require a no-default-includes
+XKB context and why PS5 links require the systemic descriptor wrapper:
+`F_DUPFD_CLOEXEC` could falsely return socket FD 0 instead of duplicating a SHM
+FD. The corrected wrapper plus the explicit Wayland compatibility patch preserve
+normal SCM_RIGHTS/SHM transport; no private-memory or fake-success fallback is used.
+Physical mouse/keyboard interaction and final on-TV usability remain pending the
+coordinator's single end-to-end human session.
+

@@ -47,9 +47,10 @@ int sceKeyboardInit(void);
 int sceKeyboardOpen(int, int, int, void *);
 int sceKeyboardClose(int);
 int sceKeyboardReadState(int, void *);
-int sceSysmoduleLoadModule(uint16_t);
-int sceSysmoduleGetModuleHandleInternal(uint32_t, int32_t *);
-int sceKernelDlsym(int32_t, const char *, void **);
+int sceMouseInit(void);
+int sceMouseOpen(int, int, int, void *);
+int sceMouseRead(int, void *, int);
+int sceMouseClose(int);
 struct ps5_pad_touch { uint16_t x, y; uint8_t finger, pad[3]; };
 struct ps5_pad_data {
  uint32_t buttons;

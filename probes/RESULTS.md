@@ -85,6 +85,114 @@ file; both pulls reached EOF. Neither shared-memory success depends on that
 initial invalid experiment. Clients, Ps5Backend and Ps5Deps received the
 corrected results immediately; Ps5Deps confirmed explicit CLOEXEC fallbacks.
 
+### Exact wl_shm size and descriptor generation: root cause isolated
+
+After a console reboot, a follow-on pair used server PID 123/client PID 124,
+both parented by the new elfldr PID 82. These PIDs belong to a different boot
+than the PID-123 event probe below; monotonic timestamps distinguish them.
+The pool size was exactly **8,294,400 bytes**, using the clients' generator:
+`shm_open(SHM_ANON, O_RDWR | O_CLOEXEC, 0600)`, explicit `F_SETFD`,
+`ftruncate`, and a retained read/write shared mapping.
+
+**Verdict:** original fd and plain `F_DUPFD` fd both pass all read/read-write
+and shared/private mapping combinations locally and after SCM_RIGHTS, and
+every byte is coherent in both directions. Closing the original fd before
+sending its plain duplicate does not break it.
+
+**Root cause found:** `F_DUPFD_CLOEXEC` on this SHM descriptor **returns 0
+without an error but does not return a SHM duplicate**. Descriptor 0 is a
+socket (mode `0140000`, size 0), while the original is a regular SHM object
+(mode `0100600`, size 8294400). Passing that wrong descriptor through
+SCM_RIGHTS predictably makes mapping fail; SCM_RIGHTS itself preserves the
+descriptor type correctly. An errno-only fallback is insufficient.
+
+```sh
+env/run make -C probes/ipc ps5wl-probe-ipc-exact-server.elf ps5wl-probe-ipc-exact-client.elf
+tools/ps5ctl run probes/ipc/ps5wl-probe-ipc-exact-server.elf
+tools/ps5ctl run probes/ipc/ps5wl-probe-ipc-exact-client.elf
+tools/ps5ctl logs --port 9549
+tools/ps5ctl logs --port 9550
+```
+
+Exact excerpts:
+
+```text
+[1581203 ms] probe-ipc-exact-client: started pid=124 ppid=82 uid=1 pagesize=16384
+[1581203 ms] probe-ipc-exact-client: fd inspect client original fd=9 fstat=0 errno=0 mode=0100600 size=8294400 dev=158 ino=34 F_GETFL=0x2 F_GETFD=0x1
+[1581213 ms] probe-ipc-exact-server: fd inspect server received fd=8 fstat=0 errno=0 mode=0100600 size=8294400 dev=158 ino=34 F_GETFL=0x2 F_GETFD=0
+[1581213 ms] probe-ipc-exact-server: map inspect server received fd=8 length=8294400 prot=0x1 flags=0x1 ptr=200124000 errno=0
+[1581213 ms] probe-ipc-exact-server: map inspect server received fd=8 length=8294400 prot=0x3 flags=0x1 ptr=200124000 errno=0
+[1581213 ms] probe-ipc-exact-server: map inspect server received fd=8 length=8294400 prot=0x1 flags=0x2 ptr=200124000 errno=0
+[1581213 ms] probe-ipc-exact-server: map inspect server received fd=8 length=8294400 prot=0x3 flags=0x2 ptr=200124000 errno=0
+[1581229 ms] probe-ipc-exact-server: server coherence client->server kind=0 all_8294400_bytes=PASS
+[1581235 ms] probe-ipc-exact-server: server coherence server->client kind=0 verdict=PASS
+[1581244 ms] probe-ipc-exact-client: dup exact kind=1 original=9 duplicate=10 errno=0
+[1581244 ms] probe-ipc-exact-client: closed original before SCM_RIGHTS original=9 duplicate=10
+[1581244 ms] probe-ipc-exact-client: fd inspect client duplicate original closed fd=10 fstat=0 errno=0 mode=0100600 size=8294400 dev=158 ino=34 F_GETFL=0x2 F_GETFD=0x1
+[1581245 ms] probe-ipc-exact-server: fd inspect server received fd=8 fstat=0 errno=0 mode=0100600 size=8294400 dev=158 ino=34 F_GETFL=0x2 F_GETFD=0
+[1581261 ms] probe-ipc-exact-server: server coherence client->server kind=1 all_8294400_bytes=PASS
+[1581267 ms] probe-ipc-exact-server: server coherence server->client kind=1 verdict=PASS
+[1581277 ms] probe-ipc-exact-client: dup exact kind=2 original=9 duplicate=0 errno=0
+[1581277 ms] probe-ipc-exact-client: fd inspect client duplicate original closed fd=0 fstat=0 errno=0 mode=0140000 size=0 dev=0 ino=0 F_GETFL=0x2 F_GETFD=0x1
+[1581277 ms] probe-ipc-exact-client: map inspect client duplicate original closed fd=0 length=8294400 prot=0x3 flags=0x1 ptr=ffffffffffffffff errno=19
+[1581277 ms] probe-ipc-exact-server: fd inspect server received fd=8 fstat=0 errno=0 mode=0140000 size=0 dev=0 ino=0 F_GETFL=0x2 F_GETFD=0
+[1581277 ms] probe-ipc-exact-server: map inspect server received fd=8 length=8294400 prot=0x3 flags=0x1 ptr=ffffffffffffffff errno=19
+[1581277 ms] probe-ipc-exact-server: server coherence client->server kind=2 all_8294400_bytes=FAIL
+[1581277 ms] probe-ipc-exact-server: server coherence server->client kind=2 verdict=FAIL
+```
+
+Here errno **19** is directly observed from the controlled bad-fd mapping;
+it must not be confused with the compositor's separately observed errno 45.
+The original, duplicate and receiver all passed all four mapping variants for
+kind 1. Both payloads completed their bounded linger and log pulls reached EOF.
+This control does not establish foreground-title credential equivalence.
+
+The result was immediately sent to Ps5Deps, Ps5Backend, Clients and Main.
+The required fix is to **never pass `F_DUPFD_CLOEXEC` to the PS5 kernel**:
+implement duplication as `F_DUPFD` plus checked `F_SETFD(FD_CLOEXEC)`.
+The coordinator assigned a stack-wide wrapper and relinking to Ps5Deps,
+rather than treating this as a transport failure or a special wl_shm input.
+
+### Canonical descriptor compatibility: exact SHM regression passes
+
+**Verdict: PASS** after routing PS5 links through
+`cross/bin/prospero-clang` and Ps5Deps' descriptor compatibility archive.
+The eight IPC, spawn and events variants built through the pinned container
+with exit status 0. The exact pair passed once as PIDs 125/126, then again
+as PIDs **127/128** after adding direct wrapped accept4 coverage. Both final
+log pulls (9549/9550) reached EOF after `probe complete`.
+
+All three 8,294,400-byte SHM modes now preserve the regular-file descriptor
+and every byte in both directions: original, F_DUPFD, F_DUPFD_CLOEXEC.
+For both duplicate modes the original fd is closed before SCM_RIGHTS.
+Original, post-close duplicate and receiver pass all four READ/RW ×
+SHARED/PRIVATE mapping controls. The former kind-2 fd-0/socket failure is
+absent: F_DUPFD_CLOEXEC now returns fd 10 with the original SHM identity.
+
+Separate 16 KiB controls replace an already-open target descriptor using
+F_DUP2FD_CLOEXEC and dup3(O_CLOEXEC). Both APIs return exactly the requested
+target, preserve source fstat identity/size, set CLOEXEC, and preserve
+bidirectional shared-mapping coherence. Native dup2 is exported; native
+dup3 is absent, so the latter success is the compatibility implementation.
+
+The flag controls now report CLOEXEC and NONBLOCK set on sockets and both
+socketpair ends, CLOEXEC set by open/shm_open, and CLOEXEC set on every
+descriptor received with MSG_CMSG_CLOEXEC. The direct wrapped accept4 call
+works despite the absent native export and sets both requested flags; the
+probe restores blocking mode before the coherence exchange.
+
+```text
+[2189301 ms] probe-ipc-exact-server: exact-target api=F_DUP2FD_CLOEXEC source=8 target=9 result=9 errno=0 srcstat=0 dststat=0 mode=0100600 size=16384 FD_CLOEXEC=1 identity=1 coherent=1 verdict=PASS
+[2189301 ms] probe-ipc-exact-server: exact-target api=dup3 source=8 target=9 result=9 errno=0 srcstat=0 dststat=0 mode=0100600 size=16384 FD_CLOEXEC=1 identity=1 coherent=1 verdict=PASS
+[2189467 ms] probe-ipc-exact-server: accept4 native_symbol=0 fd=9 errno=0 FD_CLOEXEC=1 O_NONBLOCK=1
+[2189543 ms] probe-ipc-exact-client: dup exact kind=2 original=9 duplicate=10 errno=0
+[2189543 ms] probe-ipc-exact-client: closed original before SCM_RIGHTS original=9 duplicate=10
+[2189543 ms] probe-ipc-exact-client: fd inspect client duplicate original closed fd=10 fstat=0 errno=0 mode=0100600 size=8294400 dev=158 ino=34 F_GETFL=0x2 F_GETFD=0x1
+[2189544 ms] probe-ipc-exact-server: recvmsg MSG_CMSG_CLOEXEC rc=1 errno=0 flags=0 kind=2 fd=8 FD_CLOEXEC=1
+[2189560 ms] probe-ipc-exact-server: server coherence client->server kind=2 all_8294400_bytes=PASS
+[2189567 ms] probe-ipc-exact-client: client coherence server->client kind=2 all_8294400_bytes=PASS server_ack=1
+```
+
 ## 2. Payload-to-payload spawning
 
 **Verdict: PASS** for both `file:` URI and raw ELF bytes sent by a payload to
@@ -240,10 +348,12 @@ The compositor subsequently exposed `wl_display_create()` returning NULL
 with errno 45. An additional real-console probe (PID 140) compared the
 original emulated eventfd against both duplication commands.
 
-**Verdict:** `F_DUPFD_CLOEXEC` is unsupported (`EOPNOTSUPP`, not `EINVAL`).
-`F_DUPFD` succeeds and its alias can be watched with epoll, but the alias
-cannot be read through epoll-shim because duplication does not copy its
-userspace descriptor metadata. The original descriptor still works.
+**Historical, pre-compatibility verdict:** raw `F_DUPFD_CLOEXEC` returned
+`EOPNOTSUPP` (not `EINVAL`) in these eventfd/socketpair controls. `F_DUPFD`
+succeeds and its alias can be watched with epoll, but the alias cannot be read
+through epoll-shim because duplication does not copy its userspace metadata.
+The original descriptor still works. The wrapped regression below supersedes
+the duplication failure, not the general alias-read limitation.
 
 ```text
 [16992435 ms] probe-events-shim: eventfd alias mode=original original=10 alias=10 dup_errno=0
@@ -262,9 +372,10 @@ userspace descriptor metadata. The original descriptor still works.
 Ps5Deps confirmed that Wayland watches the duplicate but invokes its callback
 with the original fd. Therefore this tested alias-readiness behavior suffices
 for Wayland; supporting arbitrary reads through shim aliases would be extra
-scope. Ps5Deps owns the measured `EOPNOTSUPP` fallback to checked
-`F_DUPFD` plus `F_SETFD(FD_CLOEXEC)`. The descriptor tests remain as a
-regression probe, with the general alias-read limitation explicitly recorded.
+scope. Ps5Deps initially added the measured `EOPNOTSUPP` fallback to checked
+`F_DUPFD` plus `F_SETFD(FD_CLOEXEC)`, then implemented the stack-wide wrapper
+after the exact SHM probe exposed silent success on the raw command.
+The descriptor tests retain the general alias-read limitation explicitly.
 
 A follow-on control run (PID 141) proves the unsupported command is not
 specific to emulated eventfds. It also verifies explicit CLOEXEC setting:
@@ -289,6 +400,43 @@ specific to emulated eventfds. It also verifies explicit CLOEXEC setting:
 Both control runs built successfully inside `env/run`, used the same
 `ps5wl-probe-events-shim.elf` deployment and port 9548, completed their
 bounded log linger and reached EOF. No probe payload remains running.
+
+### Canonical wrapper plus epoll-shim dispatch regression
+
+**Verdict: PASS for the Wayland alias-watch/original-read contract.**
+After Ps5Deps rebuilt epoll-shim with its internal real_fcntl pointer bound
+to the canonical wrapper rather than raw dlsym(fcntl), the relinked probe
+ran as PID **129** on firmware_raw **0x10600006**. Port 9548 reached EOF
+after `events probe complete`; the probe self-exited.
+
+Original eventfd/timerfd/signalfd cases still pass: eventfd reads 7,
+the 50 ms timer reads one expiration, signalfd reads SIGUSR1 (30).
+All five alias modes (original, F_DUPFD, F_DUPFD_CLOEXEC,
+F_DUP2FD_CLOEXEC, dup3) pass epoll ADD and readiness for eventfds and
+socketpairs. The three CLOEXEC duplication APIs report the flag already
+set before the probe's explicit flag-setting control. All socket aliases
+read byte D. The four eventfd aliases still reject read(alias) with errno
+45, but every subsequent read(original) returns eight bytes and value 11,
+directly proving Wayland's actual dispatch contract. This does not claim
+general duplicated-eventfd metadata support.
+
+```text
+[2193769 ms] probe-events-shim: eventfd alias mode=F_DUPFD_CLOEXEC original=9 alias=10 dup_errno=0
+[2193769 ms] probe-events-shim: eventfd alias mode=2 CLOEXEC before=1 setrc=0 errno=0 after=1
+[2193769 ms] probe-events-shim: eventfd alias mode=2 epoll_ctl ADD rc=0 errno=0
+[2193769 ms] probe-events-shim: eventfd alias mode=2 epoll_wait rc=1 errno=0 events=1
+[2193769 ms] probe-events-shim: eventfd alias mode=2 read_alias=-1 errno=45 value=0
+[2193769 ms] probe-events-shim: eventfd alias mode=2 read_original=8 errno=0 value=11
+[2193769 ms] probe-events-shim: eventfd alias mode=F_DUP2FD_CLOEXEC original=9 alias=10 dup_errno=0
+[2193770 ms] probe-events-shim: eventfd alias mode=3 epoll_wait rc=1 errno=0 events=1
+[2193770 ms] probe-events-shim: eventfd alias mode=3 read_original=8 errno=0 value=11
+[2193770 ms] probe-events-shim: eventfd alias mode=dup3 original=9 alias=10 dup_errno=0
+[2193770 ms] probe-events-shim: eventfd alias mode=4 epoll_wait rc=1 errno=0 events=1
+[2193770 ms] probe-events-shim: eventfd alias mode=4 read_original=8 errno=0 value=11
+[2193770 ms] probe-events-shim: socketpair alias mode=4 read_alias=1 errno=0 byte=D
+[2193770 ms] probe-events-shim: epoll_pwait temporary empty mask rc=0 errno=0 query_rc=0 SIGUSR1_restored_blocked=1
+[2193770 ms] probe-events-shim: events probe complete
+```
 
 ## 4–5. VideoOut and input
 

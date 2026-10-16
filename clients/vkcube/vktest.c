@@ -48,14 +48,24 @@ int main(void) {
         props.vendorID, props.deviceID, VK_API_VERSION_MAJOR(props.apiVersion),
         VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion));
     vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, NULL);
+    ps5log("queue family count=%u", count);
     VkQueueFamilyProperties *families = calloc(count, sizeof(*families));
-    if (!families) goto fail;
+    if (!families) {
+        ps5log("FAIL allocating queue family array count=%u", count);
+        goto fail;
+    }
     vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families);
     uint32_t family = UINT32_MAX;
-    for (uint32_t i = 0; i < count; i++)
-        if (families[i].queueCount && (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) { family = i; break; }
+    for (uint32_t i = 0; i < count; i++) {
+        ps5log("queue family=%u count=%u flags=%x", i, families[i].queueCount, families[i].queueFlags);
+        if (family == UINT32_MAX && families[i].queueCount &&
+            (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) family = i;
+    }
     free(families);
-    if (family == UINT32_MAX) goto fail;
+    if (family == UINT32_MAX) {
+        ps5log("FAIL no graphics queue family");
+        goto fail;
+    }
     float priority = 1.0f;
     VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .queueFamilyIndex = family, .queueCount = 1, .pQueuePriorities = &priority};
@@ -68,7 +78,12 @@ int main(void) {
     test_vkInvalidateMappedMemoryRanges = (PFN_vkInvalidateMappedMemoryRanges)
         vkGetDeviceProcAddr(device, "vkInvalidateMappedMemoryRanges");
     if (!test_vkCmdClearColorImage || !test_vkCmdCopyImageToBuffer ||
-        !test_vkInvalidateMappedMemoryRanges) goto fail;
+        !test_vkInvalidateMappedMemoryRanges) {
+        ps5log("FAIL required entrypoints clear=%d copy=%d invalidate=%d",
+            test_vkCmdClearColorImage != NULL, test_vkCmdCopyImageToBuffer != NULL,
+            test_vkInvalidateMappedMemoryRanges != NULL);
+        goto fail;
+    }
     VkQueue queue;
     vkGetDeviceQueue(device, family, 0, &queue);
     VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,

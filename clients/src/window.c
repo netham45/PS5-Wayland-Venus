@@ -263,7 +263,8 @@ int window_run(struct window *w, const char *name, uint16_t port,
     if (ps5wl_client_init(name, port) < 0) { perror("client init"); return 1; }
     w->display = ps5wl_client_connect(30000);
     if (!w->display) return 1;
-    w->xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    /* The compositor sends a self-contained keymap; installed XKB files are unnecessary. */
+    w->xkb = xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
     if (!w->xkb) { fail(w, "create xkb context"); goto cleanup; }
     w->registry = wl_display_get_registry(w->display);
     wl_registry_add_listener(w->registry, &registry_listener, w);
@@ -280,6 +281,14 @@ int window_run(struct window *w, const char *name, uint16_t port,
     wl_surface_commit(w->surface);
     while (w->running && !stopped) {
         if (wl_display_dispatch(w->display) < 0) {
+            if (errno == EPROTO) {
+                const struct wl_interface *interface = NULL;
+                uint32_t object_id = 0;
+                uint32_t code = wl_display_get_protocol_error(w->display, &interface, &object_id);
+                ps5log("wayland-protocol-error interface=%s object=%u code=%u",
+                       interface ? interface->name : "(unknown)", object_id, code);
+                errno = EPROTO;
+            }
             if (errno != EINTR) fail(w, "Wayland dispatch");
             if (stopped || w->failed) break;
         }

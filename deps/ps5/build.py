@@ -73,6 +73,11 @@ def source(name):
 def meson(name, options):
     src = source(name)
     binary = BUILD / 'deps' / name
+    identity = hashlib.sha256((BUILD / 'cross.ini').read_bytes()).hexdigest()
+    stamp = binary / '.ps5wl-cross-config'
+    # Meson caches the compiler and cannot migrate it with --reconfigure.
+    if binary.exists() and (not stamp.exists() or stamp.read_text() != identity):
+        shutil.rmtree(binary)
     args = ['meson', 'setup', binary, src, '--cross-file', BUILD / 'cross.ini',
             '--native-file', BUILD / 'native.ini',
             '--prefix', PREFIX, '--libdir=lib', '--default-library=static',
@@ -80,6 +85,7 @@ def meson(name, options):
     if (binary / 'meson-private/coredata.dat').exists():
         args.append('--reconfigure')
     run(args + options)
+    stamp.write_text(identity)
     # xkbcommon 1.11 has no tests-off option; build its sole enabled installable library.
     targets = ['xkbcommon'] if name == 'libxkbcommon' else []
     run(['meson', 'compile', '-C', binary, '-j', JOBS] + targets)

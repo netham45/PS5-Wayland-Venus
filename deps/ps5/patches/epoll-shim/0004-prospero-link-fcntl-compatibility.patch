@@ -1,0 +1,15 @@
+Rationale: PS5 fcntl must pass through the global link-time compatibility wrapper, including calls made by epoll-shim; dlsym would bypass that repair.
+--- a/src/wrap.c
++++ b/src/wrap.c
+@@ -69,7 +69,11 @@
+ #endif
+ #endif
+ #endif
++#ifdef __PROSPERO__
++	wrap.real_fcntl = fcntl;
++#else
+ 	WRAP(fcntl);
++#endif
+ 
+ #undef WRAP
+ }

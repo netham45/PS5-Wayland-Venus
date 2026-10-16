@@ -23,6 +23,28 @@ toolchain. The SDK pkg-config wrapper hardcodes the SDK's homebrew directory;
 `cross/pkg-config` preserves its static-link contract while isolating lookup to
 our target prefix. `build/ps5/native.ini` uses a separate host-prefix wrapper.
 
+All PS5 compiler links must use `cross/bin/prospero-clang` or its C++ counterpart.
+The generated Meson and CMake files select these proxies; `toolchain/env.sh`
+also puts them before the SDK tools. Direct Makefiles use that same compiler
+path, not independent copies of link flags. The proxy builds the standalone
+`build/ps5/runtime/libps5wl-fd-compat.a` under a lock and links it with wrappers
+for `fcntl`, `dup3`, `open`, `openat`, `shm_open`, `socket`, `socketpair`,
+`accept4`, `recvmsg`, `mkostemp` and `pipe2`. Each wrapper has its own archive
+member, so unused APIs do not become new firmware imports.
+
+PS5's nominal `F_DUPFD_CLOEXEC` command is incompatible: console probes showed
+both failure on sockets and false success returning an unrelated fd zero for
+SHM. The wrapper never sends it (or `F_DUP2FD_CLOEXEC`) to the kernel. It uses
+real duplication and checked `F_SETFD(FD_CLOEXEC)`. Other `fcntl` commands are
+tail-forwarded unchanged by an x86-64 ABI trampoline, preserving pointer,
+integer and absent variadic arguments. Exact-target duplication uses native
+`F_DUP2FD`, avoiding an additional firmware `dup2` import.
+Creation/receive wrappers remove unreliable atomic flags and explicitly set
+close-on-exec/nonblocking state, cleaning up acquired descriptors on failure.
+`accept4` uses the real `accept`; no nonexistent firmware `accept4` import is
+introduced. The native regression is `cross/test-fd-compat.sh`; console probe
+regressions verify actual SHM identity and cross-process mapping coherence.
+
 wlroots 0.20 always includes the pixman renderer, headless/Wayland backends,
 shared-memory allocator and DRM-dumb allocator. Its `renderers` option only lists
 optional GPU renderers, so `renderers=[]` means pixman-only. `backends=[]` and
@@ -55,6 +77,8 @@ or compatibility copy is retained.
 - `epoll-shim/0003-prospero-bind-static-ppoll.patch`: console `dlsym` has no
   `ppoll` export, although SDK static libc implements it. Bind that real
   implementation directly instead of aborting during dynamic symbol lookup.
+- `epoll-shim/0004-prospero-link-fcntl-compatibility.patch`: bind `fcntl` through
+  the link-time wrapper instead of bypassing it through `dlsym`.
 - `wayland/0001-freebsd-local-socket-level.patch`: use protocol level zero for
   local socket options when the old SDK lacks the later `SOL_LOCAL` spelling.
 - `wayland/0002-growable-closure-log-buffer.patch`: use
@@ -63,11 +87,11 @@ or compatibility copy is retained.
 - `wayland/0003-prospero-set-socket-cloexec-explicitly.patch`: console probes
   observed successful `SOCK_CLOEXEC` socket creation without the close-on-exec
   flag. Always use Wayland's checked `fcntl(F_SETFD)` fallback on PS5.
-- `wayland/0004-unsupported-atomic-dup-cloexec-fallback.patch`: console
-  `F_DUPFD_CLOEXEC` fails with `EOPNOTSUPP`; use the existing checked
-  `F_DUPFD` plus `F_SETFD` path for that unsupported atomic operation.
-  Wayland polls the duplicate but dispatches callbacks with the original fd.
-  General reads through aliases of shim-created eventfds remain unsupported.
+- `wayland/0004-prospero-duplicate-and-set-cloexec.patch`: never attempt the
+  incompatible atomic duplication command on PS5, even when it appears to
+  succeed. Use real `F_DUPFD` and checked `F_SETFD`.
+  Wayland polls the duplicate but dispatches callbacks with the original fd;
+  general reads through aliases of shim-created eventfds remain unsupported.
 - `libdrm/0001-growable-modifier-name-buffer.patch`: preserve complete ARM/AMD
   modifier names with the same checked growable buffer instead of unavailable
   `open_memstream`.
@@ -80,6 +104,9 @@ or compatibility copy is retained.
   the library does not implement it; `shim/getline.c` supplies the real
   stream-locking, dynamically growing POSIX line reader, including embedded
   NULs, unterminated final lines and EOF/error handling.
+- `wlroots/0004-report-shm-import-descriptor-identity.patch`: preserve the
+  actual mapping error and report fd flags/stat identity on failure without
+  changing writable/shared mapping semantics.
 
 libxkbcommon 1.11 has no tests-off switch. The builder explicitly compiles only
 its enabled installable library, rather than unrelated test/fuzz/benchmark
@@ -122,8 +149,8 @@ a successful link alone does not prove console behavior.
 
 ### Observed console acceptance
 
-After the unsupported atomic-dup fallback patch, a freshly uploaded linktest
-on `192.168.3.211` completed through Payload Manager and TCP port 9531:
+An earlier freshly uploaded linktest, after the initial atomic-dup fallback
+repair, completed on `192.168.3.211` through Payload Manager and TCP port 9531:
 
 ```text
 deps-linktest: wlr_log_init: OK
@@ -138,3 +165,13 @@ The host upload/launch/log command exited zero. Separate console probes also
 passed epoll/eventfd, timerfd, signalfd and temporary-mask `epoll_pwait`, including
 restoration of the original blocked signal mask. These observations establish
 the dependency/linktest path, not compositor rendering or unsupported GPU APIs.
+
+The subsequent exact fd regression exposed the false-success SHM case and
+verified the systemic compiler-wrapper repair: all three 8,294,400-byte SHM
+paths (original, plain duplicate, requested CLOEXEC duplicate) retained the
+correct backing object after the original fd was closed, mapped successfully
+with read/read-write and shared/private combinations, and passed full-byte
+bidirectional coherence checks. Exact-target `F_DUP2FD_CLOEXEC` and `dup3`
+also retained identity, size and close-on-exec state and passed coherence.
+Socket/socketpair close-on-exec and nonblocking flags, open/shm_open
+close-on-exec, and received SCM_RIGHTS close-on-exec were observed set.

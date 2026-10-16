@@ -2,10 +2,11 @@
  * SDL release-2.30.x-ps5 src/video/ps5/SDL_ps5keyboard.c:134-195
  * (foreground user/Open/Init), src/joystick/ps5/SDL_ps5joystick.c:346-421
  * (standard pad Open/Init), and prospero-win native/pw_hid_ps5.c:92-120
- * (mouse sysmodule init/open, record layout in pw_hid_ps5.h:17-24).
+ * (mouse open parameters, record layout in pw_hid_ps5.h:17-24).
  * HID set differencing here deliberately avoids SDL's slot-order assumption. */
 #include "ps5.h"
 #include "ps5log.h"
+#include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -18,8 +19,6 @@ struct ps5_input {
  struct wlr_keyboard keyboard, pad_keyboard;
  struct wlr_pointer mouse, pad_pointer;
  int keyboard_fd, mouse_fd, pad_fd, user;
- int (*mouse_read)(int, void *, int);
- int (*mouse_close)(int);
  bool keys[256];
  uint32_t mouse_buttons, pad_buttons;
  struct ps5_pad_data previous_pad;
@@ -92,20 +91,11 @@ static void open_devices(struct ps5_input *in) {
   ps5log("scePadOpen user=%#x handle=%#x", in->user, in->pad_fd);
  }
  if (in->mouse_fd < 0) {
-  int32_t handle = -1;
-  int rc = sceSysmoduleLoadModule(0xa9);
-  if (sceSysmoduleGetModuleHandleInternal(0xa9, &handle))
-   sceSysmoduleGetModuleHandleInternal(0x800000a9, &handle);
-  int (*init)(void) = NULL, (*open_mouse)(int, int, int, void *) = NULL;
-  if (handle >= 0 && !sceKernelDlsym(handle, "sceMouseInit", (void **)&init) &&
-   !sceKernelDlsym(handle, "sceMouseOpen", (void **)&open_mouse) &&
-   !sceKernelDlsym(handle, "sceMouseRead", (void **)&in->mouse_read)) {
-   sceKernelDlsym(handle, "sceMouseClose", (void **)&in->mouse_close);
-   int init_rc = init(); uint64_t param = 1;
-   in->mouse_fd = open_mouse(in->user, 0, 0, &param);
-   if (in->mouse_fd < 0) { param = 0; in->mouse_fd = open_mouse(in->user, 0, 0, &param); }
-   ps5log("sceMouseInit rc=%#x sceMouseOpen=%#x", init_rc, in->mouse_fd);
-  } else ps5log("sceMouse module rc=%#x handle=%#x", rc, handle);
+  uint64_t param = 1;
+  in->mouse_fd = sceMouseOpen(in->user, 0, 0, &param);
+  if (in->mouse_fd < 0) { param = 0; in->mouse_fd = sceMouseOpen(in->user, 0, 0, &param); }
+  ps5log("sceMouseOpen user=%#x handle=%#x merged=%llu",
+   in->user, in->mouse_fd, (unsigned long long)param);
  }
 }
 static double stick(uint8_t value) {
@@ -135,7 +125,7 @@ static int poll_input(void *data) {
  }
  if (in->mouse_fd >= 0) {
   unsigned char records[64 * 40] = {0};
-  int count = in->mouse_read(in->mouse_fd, records, 64);
+  int count = sceMouseRead(in->mouse_fd, records, 64);
   if (count > 64) count = 64;
   int dx = 0, dy = 0, wheel = 0, tilt = 0; uint32_t next = in->mouse_buttons; uint64_t newest = 0;
   for (int i = 0; i < count; ++i) {
@@ -185,6 +175,11 @@ struct ps5_input *ps5_input_create(struct wlr_backend *backend, struct wl_displa
  ps5log("sceUserServiceInitialize rc=%#x", sceUserServiceInitialize(NULL));
  int rc = sceUserServiceGetForegroundUser(&in->user);
  ps5log("input foreground user=%#x rc=%#x keyboard_init=%#x pad_init=%#x", in->user, rc, sceKeyboardInit(), scePadInit());
+ Dl_info mouse_module = {0};
+ int mouse_resolved = dladdr((void *)sceMouseInit, &mouse_module);
+ ps5log("SDK native mouse import module=%s address=%p sceMouseInit rc=%#x",
+  mouse_resolved && mouse_module.dli_fname ? mouse_module.dli_fname : "(dladdr unavailable)",
+  (void *)sceMouseInit, sceMouseInit());
  wlr_keyboard_init(&in->keyboard, &keyboard_impl, "PS5 USB/Bluetooth keyboard");
  wlr_keyboard_init(&in->pad_keyboard, &keyboard_impl, "PS5 DualSense keys");
  wlr_pointer_init(&in->mouse, &pointer_impl, "PS5 USB/Bluetooth mouse");
@@ -205,7 +200,7 @@ void ps5_input_destroy(struct ps5_input *in) {
  if (!in) return;
  if (in->timer) wl_event_source_remove(in->timer);
  if (in->keyboard_fd >= 0) sceKeyboardClose(in->keyboard_fd);
- if (in->mouse_fd >= 0 && in->mouse_close) in->mouse_close(in->mouse_fd);
+ if (in->mouse_fd >= 0) sceMouseClose(in->mouse_fd);
  if (in->pad_fd >= 0) scePadClose(in->pad_fd);
  wlr_keyboard_finish(&in->keyboard); wlr_keyboard_finish(&in->pad_keyboard);
  wlr_pointer_finish(&in->mouse); wlr_pointer_finish(&in->pad_pointer);

@@ -1,0 +1,39 @@
+Rationale: Diagnose the observed PS5 shared-memory import mmap failure without changing mapping permissions, sharing, descriptor ownership, or protocol error handling.
+--- a/types/wlr_shm.c
++++ b/types/wlr_shm.c
+@@ -2,9 +2,14 @@
+ #define _DEFAULT_SOURCE // for MAP_ANONYMOUS
+ #include <assert.h>
+ #include <drm_fourcc.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <inttypes.h>
+ #include <signal.h>
+ #include <stdatomic.h>
+ #include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
+ #include <sys/mman.h>
+ #include <unistd.h>
+ #include <wayland-server-protocol.h>
+@@ -101,7 +106,19 @@
+ static struct wlr_shm_mapping *mapping_create(int fd, size_t size) {
+ 	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+ 	if (data == MAP_FAILED) {
+-		wlr_log_errno(WLR_DEBUG, "mmap failed");
++		int mmap_error = errno;
++		int flags = fcntl(fd, F_GETFL);
++		int flags_error = flags < 0 ? errno : 0;
++		int fd_flags = fcntl(fd, F_GETFD);
++		int fd_flags_error = fd_flags < 0 ? errno : 0;
++		struct stat statbuf = {0};
++		int stat_error = fstat(fd, &statbuf) < 0 ? errno : 0;
++		wlr_log(WLR_DEBUG, "mmap(fd=%d, size=%zu, prot=READ|WRITE, sharing=SHARED) "
++			"failed: %s; F_GETFL=%#x/%d F_GETFD=%#x/%d; fstat=%d/%d mode=%#jo size=%jd",
++			fd, size, strerror(mmap_error), (unsigned)flags, flags_error,
++			(unsigned)fd_flags, fd_flags_error, stat_error == 0 ? 0 : -1,
++			stat_error, (uintmax_t)statbuf.st_mode, (intmax_t)statbuf.st_size);
++		errno = mmap_error;
+ 		return NULL;
+ 	}
+ 

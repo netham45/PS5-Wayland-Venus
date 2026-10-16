@@ -1,0 +1,16 @@
+Rationale: PS5's F_DUPFD_CLOEXEC command is incompatible: it returns EOPNOTSUPP for sockets but falsely returns zero for SHM without duplicating it. Always use real F_DUPFD plus checked FD_CLOEXEC on PS5.
+--- a/src/wayland-os.c
++++ b/src/wayland-os.c
+@@ -140,10 +140,12 @@
+ 	int newfd;
+ 
++#ifndef __PROSPERO__
+ 	newfd = wl_fcntl(fd, F_DUPFD_CLOEXEC, minfd);
+ 	if (newfd >= 0)
+ 		return newfd;
+ 	if (errno != EINVAL)
+ 		return -1;
++#endif
+ 
+ 	newfd = wl_fcntl(fd, F_DUPFD, minfd);
+ 	return set_cloexec_or_close(newfd);

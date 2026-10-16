@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -37,6 +38,16 @@ static void read_event(const char *what,int rd,int wr) {
     int q=kqueue();struct kevent e;EV_SET(&e,rd,EVFILT_READ,EV_ADD|EV_ONESHOT,0,0,NULL);errno=0;int r=kevent(q,&e,1,NULL,0,NULL);ps5log("kqueue EVFILT_READ %s add rc=%d errno=%d",what,r,r<0?errno:0);
     write(wr,"R",1);struct timespec timeout={1,0};r=kevent(q,NULL,0,&e,1,&timeout);ps5log("kqueue EVFILT_READ %s wait rc=%d errno=%d ident=%lu filter=%d flags=%x data=%ld",what,r,r<0?errno:0,e.ident,e.filter,e.flags,e.data);
     struct pollfd p={rd,POLLIN,0};r=poll(&p,1,1000);char c=0;ssize_t n=read(rd,&c,1);ps5log("poll %s rc=%d revents=%x read=%zd byte=%c",what,r,p.revents,n,c);close(q);
+}
+#endif
+#ifndef NATIVE_ONLY
+static int alias_descriptor(int original,int mode) {
+    if(!mode)return original;
+    if(mode<3)return fcntl(original,mode==1?F_DUPFD:F_DUPFD_CLOEXEC,0);
+    int target=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(target<0)return -1;
+    int result=mode==3?fcntl(original,F_DUP2FD_CLOEXEC,target):dup3(original,target,O_CLOEXEC);
+    if(result!=target){int error=result<0?errno:EIO;if(result>=0)close(result);close(target);errno=error;return -1;}
+    return result;
 }
 #endif
 int main(void) {
@@ -75,11 +86,11 @@ int main(void) {
     }
     /* Reproduce Wayland wl_os_dupfd_cloexec -> epoll_ctl on a shim eventfd.
      * epoll_shim_ctx.c:802-809 delegates duplication to real fcntl. */
-    for(int mode=0;mode<3;mode++){
-        int original=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK);int alias=original;
-        errno=0;
-        if(mode)alias=fcntl(original,mode==1?F_DUPFD:F_DUPFD_CLOEXEC,0);
-        ps5log("eventfd alias mode=%s original=%d alias=%d dup_errno=%d",mode==0?"original":mode==1?"F_DUPFD":"F_DUPFD_CLOEXEC",original,alias,errno);
+    for(int mode=0;mode<5;mode++){
+        int original=eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK);errno=0;
+        int alias=alias_descriptor(original,mode);
+        const char *names[]={"original","F_DUPFD","F_DUPFD_CLOEXEC","F_DUP2FD_CLOEXEC","dup3"};
+        ps5log("eventfd alias mode=%s original=%d alias=%d dup_errno=%d",names[mode],original,alias,errno);
         if(alias>=0){
             int before=fcntl(alias,F_GETFD,0);errno=0;int setrc=fcntl(alias,F_SETFD,before|FD_CLOEXEC);int seterr=errno;int afterflags=fcntl(alias,F_GETFD,0);
             ps5log("eventfd alias mode=%d CLOEXEC before=%d setrc=%d errno=%d after=%d",mode,before,setrc,seterr,afterflags);
@@ -88,15 +99,16 @@ int main(void) {
             uint64_t value=11;errno=0;ssize_t n=write(original,&value,8);ps5log("eventfd alias mode=%d write_original=%zd errno=%d",mode,n,errno);
             errno=0;r=epoll_wait(ep,&ev,1,100);ps5log("eventfd alias mode=%d epoll_wait rc=%d errno=%d events=%x",mode,r,errno,ev.events);
             value=0;errno=0;n=read(alias,&value,8);ps5log("eventfd alias mode=%d read_alias=%zd errno=%d value=%lu",mode,n,errno,value);
+            if(n<0&&alias!=original){value=0;errno=0;n=read(original,&value,8);ps5log("eventfd alias mode=%d read_original=%zd errno=%d value=%lu",mode,n,errno,value);}
             if(alias!=original)close(alias);
         }
         close(original);
     }
-    for(int mode=0;mode<3;mode++){
+    for(int mode=0;mode<5;mode++){
         int pair[2];errno=0;int pairrc=socketpair(AF_UNIX,SOCK_STREAM,0,pair);
         ps5log("socketpair alias mode=%d create rc=%d errno=%d",mode,pairrc,errno);
         if(pairrc<0)continue;
-        int alias=pair[0];errno=0;if(mode)alias=fcntl(pair[0],mode==1?F_DUPFD:F_DUPFD_CLOEXEC,0);
+        errno=0;int alias=alias_descriptor(pair[0],mode);
         ps5log("socketpair alias mode=%d original=%d alias=%d dup_errno=%d",mode,pair[0],alias,errno);
         if(alias>=0){
             int before=fcntl(alias,F_GETFD,0);errno=0;int setrc=fcntl(alias,F_SETFD,before|FD_CLOEXEC);int seterr=errno;int afterflags=fcntl(alias,F_GETFD,0);

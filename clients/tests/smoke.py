@@ -41,8 +41,11 @@ with tempfile.TemporaryDirectory(prefix='client-smoke-', dir=BUILD) as runtime:
             time.sleep(1)
             for name, mode in [('simple-shm', 'input'), ('demo', 'demo')]:
                 log_path = artifacts / f'{name}.log'
+                # Payload clients cannot depend on installed XKB data; only the
+                # compositor and the virtual-keyboard injector compile from files.
+                client_env = dict(env, XKB_CONFIG_ROOT=str(Path(runtime) / 'no-xkb-data'))
                 with log_path.open('w+') as log:
-                    client = subprocess.Popen([str(BUILD / f'clients/ps5wl-{name}')], env=env,
+                    client = subprocess.Popen([str(BUILD / f'clients/ps5wl-{name}')], env=client_env,
                                               stdout=log, stderr=log)
                     try:
                         deadline = time.monotonic() + 10

@@ -16,7 +16,29 @@
  #endif
  
  #ifdef _WIN32
-@@ -429,7 +434,6 @@
+@@ -126,12 +131,21 @@
+     } while (0)
+ #endif  // VARARGS_WORKS_ON_ANDROID
+ #else
++#ifdef PS5WL_PS5
++#define ERR_EXIT(err_msg, err_class) \
++    do { \
++        ps5log("FAIL %s: %s", err_class, err_msg); \
++        ps5log_flush_wait(30000); \
++        exit(1); \
++    } while (0)
++#else
+ #define ERR_EXIT(err_msg, err_class) \
+     do {                             \
+         printf("%s\n", err_msg);     \
+         fflush(stdout);              \
+         exit(1);                     \
+     } while (0)
++#endif
+ void DbgMsg(char *fmt, ...) {
+     va_list va;
+     va_start(va, fmt);
+@@ -429,7 +443,6 @@
      xcb_intern_atom_reply_t *atom_wm_delete_window;
  #endif
  #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
@@ -24,7 +46,7 @@
      struct wl_display *wayland_display;
      struct wl_registry *registry;
      struct wl_compositor *compositor;
-@@ -3052,6 +3056,8 @@
+@@ -3052,6 +3065,8 @@
                  demo_draw(demo);
                  if (!demo->is_minimized) {
                      demo->curFrame++;
@@ -33,7 +55,7 @@
                  }
                  if (demo->frameCount != INT32_MAX && demo->curFrame == demo->frameCount) demo->quit = true;
              }
-@@ -3742,12 +3748,7 @@
+@@ -3742,12 +3757,7 @@
  #endif
  #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
  static const char *demo_init_wayland_connection(struct demo *demo) {
@@ -47,7 +69,7 @@
  
      if (demo->wayland_display == NULL) {
          return "Cannot connect to wayland.";
-@@ -5101,6 +5102,11 @@
+@@ -5101,6 +5111,11 @@
  #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
  int main(int argc, char **argv) {
      struct demo demo;
@@ -59,7 +81,7 @@
  
      demo_init(&demo, argc, argv);
      switch (demo.wsi_platform) {
-@@ -5193,6 +5199,8 @@
+@@ -5193,6 +5208,8 @@
      }
  
      demo_cleanup(&demo);

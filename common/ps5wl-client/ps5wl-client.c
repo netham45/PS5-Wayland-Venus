@@ -11,14 +11,23 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
+static void wayland_log(const char *format, va_list args) {
+    char line[1024];
+    vsnprintf(line, sizeof(line), format, args);
+    ps5log("libwayland: %s", line);
+}
+
 int ps5wl_client_init(const char *name, uint16_t port) {
     if (ps5log_init(name, port) < 0) return -1;
+    wl_log_set_handler_client(wayland_log);
 #if defined(PS5WL_PS5) || defined(__FreeBSD__)
     if (setenv("XDG_RUNTIME_DIR", "/system_tmp", 1) < 0 ||
         setenv("WAYLAND_DISPLAY", "/system_tmp/wayland-0", 1) < 0) return -1;

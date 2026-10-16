@@ -6,7 +6,7 @@ all: hello.elf
 
 ifeq ($(PS5WL_BUILD_ENV),1)
 export LLVM_CONFIG ?= /usr/bin/llvm-config
-CC := $(PS5_PAYLOAD_SDK)/bin/prospero-clang
+CC := $(REPO)/cross/bin/prospero-clang
 CPPFLAGS += -I$(REPO)/common/ps5log
 CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -pthread

@@ -14,6 +14,11 @@ env/run python3 clients/vkcube/smoke.py
 env/run clients/vkcube/build.sh ps5
 ```
 
+Both PS5 payload links read the compiler, C flags, and linker flags from
+`build/ps5/cross.ini`, exactly as Mesa does. This includes the common PS5
+descriptor-compatibility wrappers even for the standalone GPU smoke, which
+does not link Wayland.
+
 The host smoke starts a private pixman/headless ps5wl, loads this build's
 lavapipe ICD directly (not a host distro Vulkan loader), renders 120 cube
 frames through Wayland WSI, and requires the completed frame counter. It

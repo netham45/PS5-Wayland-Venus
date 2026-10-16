@@ -56,6 +56,10 @@ prospero compiler/cross configuration and static dependency linking, producing
 `build/ps5/compositor/ps5wl`. Missing dependencies fail with the required next
 command, not by falling back to host packages. PS5 selects the custom VideoOut
 backend automatically, logs on TCP 9530, and listens on `/system_tmp/wayland-0`.
+The PS5 compiler is the repository compatibility proxy. Changes to the cross
+configuration, proxy or injected runtime archive wipe Meson's cached compiler
+identity before rebuilding; incremental reconfigure cannot retain an old SDK
+compiler that bypasses the PS5 descriptor compatibility layer.
 The pinned evdev/pc105/us XKB keymap is compiled on the build host and embedded;
 no console XKB files or shell are required. New PS5 windows are maximized to
 1920x1080. Keyboard/mouse and DualSense poll at 250 Hz. Left stick/touchpad moves
@@ -80,8 +84,9 @@ System UI overlays are not included in this readback.
 `/data/ps5wl/autostart.txt`, when readable, contains one absolute client ELF path
 per line (`#` comments allowed). Only `ps5wl-*` payload paths are sent as
 `file://...?pipe=0` requests to the loopback elfldr on 9021. This does not change
-Payload Manager autoload/configuration. Upload and deploy through `tools/ps5ctl`
-as `ps5wl-compositor.elf`; do not assume the uploaded path matches this list.
+Payload Manager autoload/configuration. Upload clients through `tools/ps5ctl`
+and use its returned console paths in this list. Install and start the compositor
+itself through the foreground launcher, not a background payload upload.
 
 Host builds also expose screencopy and virtual keyboard/pointer protocols for
 the pinned client integration tests. These injection protocols are not exposed

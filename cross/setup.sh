@@ -16,9 +16,10 @@ tools = sdk / 'toolchain'
 if not (tools / 'prospero.ini').is_file():
     tools = sdk / 'host/toolchain'
 base = (tools / 'prospero.ini').read_text().replace('@DIRNAME@', str(tools))
-(root / 'build/ps5/sdk.ini').write_text(base)
 config = configparser.ConfigParser(interpolation=None)
 config.read_string(base)
+config['binaries']['c'] = f"'{root}/cross/bin/prospero-clang'"
+config['binaries']['cpp'] = f"'{root}/cross/bin/prospero-clang++'"
 config['binaries']['pkg-config'] = f"'{root}/cross/pkg-config'"
 config['binaries']['wayland-scanner'] = f"'{root}/build/host/sysroot/bin/wayland-scanner'"
 config['built-in options'].update({

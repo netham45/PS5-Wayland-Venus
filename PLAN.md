@@ -91,8 +91,14 @@ build/, .sdk/                      generated, git-ignored
 ## Contracts
 
 - `PS5_PAYLOAD_SDK` defaults to `<repo>/.sdk`; `source toolchain/env.sh` exports
-  it and puts `prospero-*` on `PATH`. No sudo, no writes outside the repo except
-  package caches.
+  it, runs `cross/bootstrap-compat.sh` inside the container, and puts
+  `cross/bin` (proxy `prospero-clang` etc. that link the PS5 compat shim into
+  every payload) ahead of the SDK's `bin` on `PATH`. All PS5 builds compile and
+  link through `cross/bin` or the generated `cross.ini`. No sudo, no writes
+  outside the repo except package caches.
+- PS5 compat shim (`deps/ps5/shim`, owned by Ps5Deps): `F_DUPFD_CLOEXEC` is
+  never passed to the kernel (it can silently return an unrelated fd);
+  `*_CLOEXEC` flags that the console ignores are applied with explicit `fcntl`.
 - `PS5_HOST` defaults to `192.168.3.211`, `PLDMGR_PORT` to `8084`.
 - Log pull: `common/ps5log` exposes
   `int ps5log_init(const char *name, uint16_t port); void ps5log(const char *fmt, ...);`

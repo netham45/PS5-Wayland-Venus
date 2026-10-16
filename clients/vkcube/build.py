@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build pinned Vulkan-Tools cube and GPU smoke against this tree's Mesa."""
 import argparse
+import ast
+import configparser
 import hashlib
 import importlib.util
 import os
@@ -56,12 +58,18 @@ def main():
               '-I' + str(ROOT / 'common/ps5log'), '-I' + str(ROOT / 'common/ps5wl-client')]
     libs = ['-pthread']
     if target == 'ps5':
-        common += ['-DPS5WL_PS5=1', '-I' + str(prefix / 'include')]
+        # Manual payload links consume the same toolchain contract as Mesa.
+        cross = configparser.ConfigParser()
+        with (ROOT / 'build/ps5/cross.ini').open() as stream:
+            cross.read_file(stream)
+        compiler = ast.literal_eval(cross['binaries']['c'])
+        common += ['-DPS5WL_PS5=1'] + ast.literal_eval(cross['built-in options']['c_args'])
         library = prefix / 'lib/libvulkan.so.1'
         shutil.copyfile(library, binary / 'radv.so')
         mesa.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
                   'radv.so', 'radv.o'], cwd=binary)
         libs += [binary / 'radv.o', '-lSceAgc', '-lSceAgcDriver']
+        libs += ast.literal_eval(cross['built-in options']['c_link_args'])
     else:
         libs += ['-lm', '-ldl']
     runtime = [ROOT / 'clients/vkcube/runtime.c', ROOT / 'common/ps5log/ps5log.c']

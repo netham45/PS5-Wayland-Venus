@@ -46,6 +46,13 @@ SDK rtld opens it. A per-process temporary file is atomically renamed over
 the installed path, so another running client keeps its mapped inode intact.
 This keeps deployment a single ELF while retaining the recipe's shared-library
 ABI. Concurrent Vulkan clients must be built from the same tree.
+
+The generated PS5 cross file selects `cross/bin/prospero-clang{,++}`.
+These proxies inject the common descriptor-compatibility archive into the
+shared-driver link as well as payload links. Mesa's FreeBSD anonymous-shm
+and descriptor-duplication paths rely on those wrappers; do not substitute
+the raw SDK compiler or add separate per-call-site flag workarounds.
+
 `0002-wayland-without-videoout.patch` disables pacbrew's otherwise
 unconditional VideoOut WSI when Wayland is selected and removes its system
 module dependency. The driver and payloads do not link SceVideoOut.

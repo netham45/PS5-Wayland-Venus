@@ -364,3 +364,20 @@ buffer marker120 equal to expected120. This independently confirms the cleanup
 helper was invoked during real flipping rather than merely before startup.
 
 
+## PS5 descriptor compatibility
+
+Every launcher payload uses `cross/bin/prospero-clang`, the repository's PS5
+compiler proxy, rather than invoking the SDK compiler directly. The proxy owns
+the system-wide descriptor compatibility shim and link wrapping; this Makefile
+does not maintain a second list of wrapped symbols. Standard `LDFLAGS` are also
+honored. All six payload targets depend on the proxy and Makefile so this
+toolchain migration relinks the diagnostic helpers as well as the installer.
+
+The launcher audit found no `F_DUPFD_CLOEXEC`, `dup3`, `accept4`,
+`SOCK_CLOEXEC`, `SOCK_NONBLOCK`, `MSG_CMSG_CLOEXEC`, or `O_CLOEXEC` requests.
+Its ordinary files and sockets need no per-call workaround. The imported
+loader intentionally uses remote `SYS_socket` with plain `SOCK_DGRAM` and
+remote `SYS_dup2` for inherited standard output/error; those ptrace operations
+bypass local linker wrappers but do not request any affected flags. Do not
+mark those inherited standard descriptors close-on-exec.
+

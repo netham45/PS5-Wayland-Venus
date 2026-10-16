@@ -1012,6 +1012,9 @@ static void payload_log(enum wlr_log_importance importance, const char *fmt, va_
 	vsnprintf(line, sizeof(line), fmt, args);
 	ps5log("%s", line);
 }
+static void wayland_log(const char *fmt, va_list args) {
+	payload_log(WLR_ERROR, fmt, args);
+}
 #else
 static void virtual_keyboard_created(struct wl_listener *listener, void *data) {
 	struct tinywl_server *server = wl_container_of(listener, server, virtual_keyboard);
@@ -1034,6 +1037,7 @@ static int compositor_main(int argc, char *argv[]) {
 	ps5log("compositor entry pid=%d uid=%d; initializing wlroots logger", getpid(), getuid());
 	ps5log_flush_wait(500);
 	wlr_log_init(WLR_INFO, payload_log);
+	wl_log_set_handler_server(wayland_log);
 	ps5log("wlroots logger initialized");
 	setenv("XDG_RUNTIME_DIR", "/system_tmp", true);
 #else
