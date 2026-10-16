@@ -290,7 +290,22 @@ static void server_new_keyboard(struct tinywl_server *server,
 	ps5log("keyboard %s creating XKB context", device->name);
 #endif
 
+#ifdef PS5WL_PS5
+	/* The embedded keymap is fully expanded; console include directories do
+	 * not exist. xkb_context_new otherwise rejects missing default paths. */
+	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
+#else
 	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+#endif
+	if (!context) {
+		wlr_log(WLR_ERROR, "Failed to initialize keyboard XKB context");
+#ifdef PS5WL_PS5
+		ps5_safety_close();
+		ps5_process_exit(1);
+#else
+		exit(EXIT_FAILURE);
+#endif
+	}
 #ifdef PS5WL_PS5
 	ps5log("keyboard XKB context=%p; compiling embedded keymap", (void *)context);
 #endif
@@ -307,7 +322,12 @@ static void server_new_keyboard(struct tinywl_server *server,
 #endif
 	if (!keymap || !wlr_keyboard_set_keymap(wlr_keyboard, keymap)) {
 		wlr_log(WLR_ERROR, "Failed to initialize keyboard keymap");
-		wl_display_terminate(server->wl_display);
+#ifdef PS5WL_PS5
+		ps5_safety_close();
+		ps5_process_exit(1);
+#else
+		exit(EXIT_FAILURE);
+#endif
 	}
 	xkb_keymap_unref(keymap);
 	xkb_context_unref(context);
@@ -1355,17 +1375,20 @@ static int compositor_main(int argc, char *argv[]) {
 #ifdef PS5WL_PS5
 	ps5log("compositor clean shutdown");
 	ps5log_flush_wait(1000);
-	_exit(0);
+	ps5_process_exit(0);
 #endif
 	return 0;
 }
 
 int main(int argc, char *argv[]) {
+#ifdef PS5WL_PS5
+	ps5_safety_identify();
+#endif
 	int status = compositor_main(argc, argv);
 #ifdef PS5WL_PS5
-	/* SDK payload main may be a thread inside the signed launcher process. */
+	/* BigApps require SDL's SystemServiceLoadExec("exit") lifecycle request. */
 	ps5log_flush_wait(1000);
-	_exit(status);
+	ps5_process_exit(status);
 #else
 	return status;
 #endif

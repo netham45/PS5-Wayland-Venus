@@ -249,7 +249,7 @@ void ps5log_emergency_write(const char *message, size_t length) {
     for (size_t i = 0; i < MAX_CLIENTS; ++i) {
         int fd = atomic_load_explicit(&emergency_fds[i], memory_order_relaxed) - 1;
         if (fd < 0) continue;
-        int flags = MSG_DONTWAIT;
+        int flags = 0; /* Every published client descriptor is O_NONBLOCK. */
 #ifdef MSG_NOSIGNAL
         flags |= MSG_NOSIGNAL;
 #endif

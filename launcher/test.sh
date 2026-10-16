@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run only after the coordinator has re-established the jailbreak and elfldr.
+# Requires the existing jailbreak, elfldr, and Payload Manager to be running.
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 MODE=${1:-compositor}
@@ -17,12 +17,12 @@ processes=$("$ROOT/tools/ps5ctl" ps)
 case "$processes" in
     *ps5wl-install.elf*|*ps5wl-uninstall.elf*|*ps5wl-launch-probe*)
         echo "Existing launcher/test process detected; do not relaunch over a stuck session." >&2
-        echo "Have the coordinator resolve the documented reboot prerequisite first." >&2
+        echo "Close the owned test app and stop its receipt-owned installer; see launcher/README.md lifecycle cleanup." >&2
         exit 1
         ;;
 esac
 if [[ "$MODE" == --probe ]]; then
-    "$ROOT/env/run" make -C "$ROOT/launcher" all
+    "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD=ps5wl-launch-probe.elf
     LOG_PORT=9582
 elif [[ "$MODE" == --elf ]]; then
     "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD="$PAYLOAD"

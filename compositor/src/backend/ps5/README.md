@@ -18,13 +18,30 @@ returned `0x80020023` for SDL's 64 MiB main allocation, but the full-pool
 availability query returned `0x8002000c` despite the successful allocation and
 is therefore diagnostic, not an allocation gate.
 
-Hardware validation is not yet complete. The latest observed payload (PID 147)
-created the Wayland display, pixman renderer and SHM allocator, tiled the first
-1920x1080 buffer and returned success from SubmitFlip, then disconnected before
-output enumeration returned. No flip completion, sustained rendering, client
-composition, screenshot or physical input has been observed from this backend.
-The next build logs immediately after the initial output commit and before
-creating the output-layout global to narrow that boundary.
+Hardware validation is not yet complete. The earlier plain elfldr PID 147
+submitted one flip, after which the console's system actions stopped working
+and the user hard-rebooted it. No cause was proven. The backend now refuses
+VideoOut unless its own process app ID matches the running foreground BigApp.
+Do not run VideoOut through a background payload. The next stage must use the
+foreground launcher with `PS5WL_VIDEOOUT_ONLY=true PS5WL_TEST_SECONDS=15`.
+
+The exact SDL tile extent is 8,912,896 bytes. The native `tiling-bounds` test
+enumerates all 2,073,600 scanout pixels, proves unique addresses, and measures
+maximum byte end 8,830,976, below both SDL's extent and each 10 MiB allocation.
+This rules out an ordinary out-of-bounds CPU tile write, not a VideoOut fault.
+
+`safety.c` installs alternate-stack fatal handlers and an independent watchdog:
+3 seconds without a main-loop heartbeat or the validation hard deadline closes
+VideoOut and exits. Fatal text is sent without allocation or locks to stderr
+and connected nonblocking log sockets. Normal teardown unregisters buffers,
+closes VideoOut, joins the bounded waiter, deletes the equeue, unmaps and releases
+memory, following the source presenters' close-before-equeue-delete order.
+These are best-effort userspace safeguards, not recovery from a kernel deadlock.
+Owned foreground applications terminate through shipping SDL's
+`sceSystemServiceLoadExec("exit", NULL)`, not raw `_exit`: PS5_RetroArch's native
+entry point documents raw kernel exit raising SIGSYS. SIGSYS is also contained
+and logged. If LoadExec returns, its result is logged and the process waits for
+app-manager termination instead of executing the forbidden raw BigApp exit.
 
 A thread blocks in the Sce flip equeue with a bounded shutdown timeout and
 writes completion timestamps to a pipe watched by the Wayland event loop.

@@ -35,7 +35,7 @@ struct ps5_backend {
  struct ps5_capture *capture;
  int video, pipefd[2];
  intptr_t physical;
- bool allocated, thread_started, pending;
+ bool allocated, registered, thread_started, pending;
  void *mapping;
  struct ps5_video_buffer buffers[2];
  struct kevent *queue;
@@ -202,17 +202,19 @@ static bool backend_start(struct wlr_backend *base) {
 static void backend_destroy(struct wlr_backend *base) {
  struct ps5_backend *b = wl_container_of(base, b, base);
  atomic_store(&b->stopping, true);
- if (b->thread_started) pthread_join(b->thread, NULL);
+ /* Close before joining: cancellation of VideoOut must not depend on the
+  * waiter returning. This follows SDL close-before-equeue-delete ordering. */
+ if (b->registered) ps5log("UnregisterBuffers rc=%#x", sceVideoOutUnregisterBuffers(b->video, 0));
+ if (b->video >= 0) { ps5log("closing VideoOut handle=%#x", b->video); ps5_safety_close(); ps5log("VideoOut closed"); }
+ if (b->thread_started) { ps5log("joining flip waiter"); pthread_join(b->thread, NULL); }
  if (b->flip_source) wl_event_source_remove(b->flip_source);
  ps5_capture_destroy(b->capture);
  ps5_input_destroy(b->input);
  wlr_output_finish(&b->output);
  wlr_backend_finish(base);
- if (b->queue) ps5log("DeleteFlipEvent rc=%#x", sceVideoOutDeleteFlipEvent(b->queue, b->video));
- if (b->video >= 0) { ps5log("closing VideoOut handle=%#x", b->video); ps5_safety_close(); ps5log("VideoOut closed"); }
  if (b->queue) ps5log("DeleteEqueue rc=%#x", sceKernelDeleteEqueue(b->queue));
- if (b->mapping) sceKernelMunmap(b->mapping, MEMORY_SIZE);
- if (b->allocated) sceKernelReleaseDirectMemory(b->physical, MEMORY_SIZE);
+ if (b->mapping) ps5log("direct munmap rc=%#x", sceKernelMunmap(b->mapping, MEMORY_SIZE));
+ if (b->allocated) ps5log("direct release rc=%#x", sceKernelReleaseDirectMemory(b->physical, MEMORY_SIZE));
  for (int i = 0; i < 2; ++i) {
   if (b->pipefd[i] >= 0) close(b->pipefd[i]);
   pixman_region32_fini(&b->stale[i]);
@@ -230,6 +232,15 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
  /* Reference: SDL release-2.30.x-ps5 src/video/ps5/SDL_ps5video.c:188-242
   * (PS5_VideoInit): SYSTEM user, direct memory type3/prot0x33, equeue,
   * flip rate0 and RegisterBuffers2 attribute0x8000000022000000. */
+ struct ps5_app_info app = {0};
+ int foreground = sceSystemServiceGetAppIdOfRunningBigApp();
+ int app_rc = sceKernelGetAppInfo(getpid(), &app);
+ ps5log("foreground entitlement query rc=%#x own_app=%#x big_app=%#x title=%.14s",
+  app_rc, app.app_id, foreground, app.title_id);
+ if (app_rc || foreground <= 0 || app.app_id != (uint32_t)foreground) {
+  ps5log("refusing VideoOut outside the current foreground BigApp");
+  return NULL;
+ }
  struct ps5_backend *b = calloc(1, sizeof(*b));
  if (!b) return NULL;
  atomic_init(&b->stopping, false);
@@ -282,6 +293,7 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
  rc = sceVideoOutRegisterBuffers2(b->video, 0, 0, b->buffers, 2, &attr, 0, NULL);
  ps5log("VideoOut RegisterBuffers2 rc=%#x format=0x8000000022000000 1920x1080", rc);
  if (rc) goto fail;
+ b->registered = true;
  if (pipe(b->pipefd)) goto fail;
  if (fcntl(b->pipefd[0], F_SETFD, FD_CLOEXEC) ||
   fcntl(b->pipefd[1], F_SETFD, FD_CLOEXEC)) goto fail;

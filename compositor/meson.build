@@ -11,6 +11,9 @@ sources = ['src/ps5wl.c']
 deps = [wlroots, wayland_server, xkbcommon]
 includes = []
 if meson.is_cross_build()
+  if get_option('videoout_only') and get_option('console_test_seconds') == 0
+    error('videoout_only requires a nonzero console_test_seconds safety deadline')
+  endif
   add_project_arguments('-DPS5WL_PS5', '-D__BSD_VISIBLE=1', language: 'c')
   add_project_arguments('-DPS5WL_TEST_SECONDS=' + get_option('console_test_seconds').to_string(), language: 'c')
   add_project_arguments('-DPS5WL_VIDEOOUT_ONLY=' + (get_option('videoout_only') ? '1' : '0'), language: 'c')
@@ -33,6 +36,9 @@ if not meson.is_cross_build()
     ['tests/capture.c', 'src/backend/ps5/capture.c', '../common/ps5log/ps5log.c'],
     include_directories: include_directories('src/backend/ps5', '../common/ps5log'),
     dependencies: [wlroots, wayland_server, dependency('threads')])
+  tiling_test = executable('tiling-test', 'tests/tiling.c',
+    include_directories: include_directories('src/backend/ps5'))
+  test('tiling-bounds', tiling_test)
   test('capture-png', find_program('python3'),
     args: [files('tests/capture.py'), capture_test], timeout: 15)
 endif

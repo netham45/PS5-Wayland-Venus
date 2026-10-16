@@ -11,6 +11,13 @@ struct kevent;
 struct ps5_video_buffer { void *data; uint64_t reserved[3]; };
 struct ps5_video_attr { uint8_t reserved[80]; };
 int sceSystemServiceHideSplashScreen(void);
+/* Payload Manager v0.5.2 src/process_mgr.c; natural SDK alignment. */
+struct ps5_app_info {
+ uint32_t app_id; uint64_t unknown1; char title_id[14]; char unknown2[0x3c];
+};
+int sceKernelGetAppInfo(pid_t, struct ps5_app_info *);
+int sceSystemServiceGetAppIdOfRunningBigApp(void);
+int sceSystemServiceLoadExec(const char *, const char **);
 /* Full-pool allocator/query ABI: Mesa PS5 ps5_sce.h:46-53. */
 int64_t sceKernelGetDirectMemorySize(void);
 int sceKernelAvailableDirectMemorySize(int64_t, int64_t, size_t, int64_t *, size_t *);
@@ -24,7 +31,7 @@ int sceKernelDeleteEqueue(struct kevent *);
 int sceVideoOutOpen(int, int, int, const void *);
 void sceVideoOutClose(int);
 int sceVideoOutAddFlipEvent(struct kevent *, int, void *);
-int sceVideoOutDeleteFlipEvent(struct kevent *, int);
+int sceVideoOutUnregisterBuffers(int, int);
 int sceVideoOutSetFlipRate(int, int);
 int sceVideoOutSubmitFlip(int, int, uint32_t, int64_t);
 /* PS5_Vulkan driver/ps5vk_private.h:1718-1721,1998ff: 16 u64 words,
@@ -72,4 +79,6 @@ int ps5_safety_init(struct wl_event_loop *);
 int ps5_safety_thread_stack(unsigned);
 void ps5_safety_video(int);
 void ps5_safety_close(void);
+void ps5_safety_identify(void);
+_Noreturn void ps5_process_exit(int);
 #endif

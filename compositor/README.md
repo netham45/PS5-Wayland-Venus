@@ -66,6 +66,12 @@ For unattended hardware validation, build with
 `PS5WL_TEST_SECONDS=60 make compositor-ps5` (accepted range 0–90, default 0).
 This timer requests full teardown and then process exit, including when running
 inside a signed foreground launcher. Normal interactive builds leave it off.
+VideoOut requires the foreground BigApp launcher; the backend rejects a plain
+background elfldr process before opening VideoOut. First validate the isolated
+output with `PS5WL_VIDEOOUT_ONLY=true PS5WL_TEST_SECONDS=15 make compositor-ps5`
+and launch that artifact through the foreground launcher without rebuilding it.
+Do not use `ps5ctl run` directly for the compositor.
+
 TCP 9531 returns a raw PNG of the completed, de-tiled scanout on connection;
 use `tools/ps5ctl screenshot --port 9531 --output capture.png` to pull it.
 System UI overlays are not included in this readback.

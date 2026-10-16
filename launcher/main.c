@@ -162,7 +162,13 @@ int main(void) {
   const char *files[]={APP "/sce_sys/icon0.png", APP "/sce_sys/param.json", TARGET, TARGET ".new"};
   for(size_t i=0;i<sizeof(files)/sizeof(files[0]);i++) if(unlink(files[i]) && errno!=ENOENT) { ps5log("unlink %s errno=%d",files[i],errno); rc=-1; }
   const char *dirs[]={APP "/sce_sys",APP,ROOT "/bin",ROOT};
-  for(size_t i=0;i<sizeof(dirs)/sizeof(dirs[0]);i++) if(rmdir(dirs[i]) && errno!=ENOENT) { ps5log("rmdir %s errno=%d (unrelated files retained)",dirs[i],errno); rc=-1; }
+  for(size_t i=0;i<sizeof(dirs)/sizeof(dirs[0]);i++) {
+   int result=rmdir(dirs[i]), error=errno;
+   if(result && error!=ENOENT) {
+    ps5log("rmdir %s errno=%d (unrelated files retained)",dirs[i],error);
+    if(error!=ENOTEMPTY) rc=-1;
+   }
+  }
   if(hbldr_remove()) rc=-1;
  }
  sceAppInstUtilTerminate();

@@ -11,23 +11,26 @@ manually before launching Wayland.
 ## Build and install
 
 Run from the repository root. All compilation uses the pinned container/SDK.
-The default bundle is a 60-second foreground diagnostic payload (logs 9582),
-not the compositor. It deliberately renders nothing. This allows launch-path
-testing before the compositor exists.
+The default bundle is the real compositor built at `build/ps5/compositor/ps5wl`
+(logs9530). The optional sixty-second launch-only diagnostic deliberately
+renders nothing and is selected explicitly with `launcher/test.sh --probe`.
 
 ```sh
+env/run compositor/build.sh ps5
 env/run make -C launcher all
 tools/ps5ctl run launcher/ps5wl-install.elf
 tools/ps5ctl logs --port 9580 --retry 30
 ```
 
-After a coordinator-approved reboot and restart of the existing jailbreak,
-elfldr and Payload Manager, the complete bounded foreground test is one command:
+With the existing jailbreak, elfldr, and Payload Manager already running, the
+complete bounded foreground test is one command:
 
 ```sh
 launcher/test.sh
 # Optional launch-only diagnostic instead of rebuilding the compositor:
 launcher/test.sh --probe
+# Preserve an existing watchdog/VIDEOOUT_ONLY build without rebuilding it:
+launcher/test.sh --elf /absolute/path/to/ps5wl-compositor.elf
 ```
 
 The default command builds the compositor with `PS5WL_TEST_SECONDS=60`, bundles
@@ -36,15 +39,16 @@ same loopback launch handler, and captures launcher plus compositor logs. It
 refuses to run while old launcher/uninstaller/probe processes are listed, never
 kills console processes, and treats a payload log stream which fails to close
 within 75 seconds as a failed bounded test. It leaves the resident installer
-available for the final integrated icon/keyboard/mouse session. The host script
-has not been run against the paused, pre-reboot console.
+available for the final integrated icon/keyboard/mouse session. The `--elf`
+mode only bundles the supplied executable: its owner must provide a bounded,
+clean-exit watchdog build. It does not discard specialized test configuration.
 
 Wait for `register ... rc=0x0`, `install result=0`, and `ready` in the logs.
 Select **PS5 Wayland** on the PS5 home screen. The browser loads a local page,
-then the foreground app should take over. Pull probe logs with:
+then the foreground app should take over. Pull compositor logs with:
 
 ```sh
-tools/ps5ctl logs --port 9582 --retry 30
+tools/ps5ctl logs --port 9530 --retry 30
 ```
 
 For an automated preflight of the same loopback handler (not evidence that the
@@ -86,6 +90,10 @@ startup integration.
 - 9580: pull logs. 9581: HTTP, bound to `127.0.0.1` only. 9582: diagnostic
   foreground payload logs. 9583: optional loopback test payload logs.
 
+For a read-only installation-state check (fixed project paths and mount flags),
+run `tools/ps5ctl run launcher/ps5wl-launch-state.elf` and pull logs on 9584.
+This diagnostic never remounts or modifies files and exits after ten seconds.
+
 The loader mirrors websrv's read/write remount sequence for `/system_ex` when
 creating/removing the unique BigApp container. Like websrv, it does **not** try
 to restore a read-only mount: hardware testing found that downgrade/upgrade
@@ -117,6 +125,7 @@ tools/ps5ctl delete ps5wl-install.elf
 tools/ps5ctl delete ps5wl-uninstall.elf
 # Only if uploaded for preflight:
 tools/ps5ctl delete ps5wl-launch-test.elf
+tools/ps5ctl delete ps5wl-launch-state.elf
 ```
 
 Local generated binaries/icon can be removed with `make -C launcher clean`.
@@ -205,7 +214,7 @@ The only system-partition additions needing removal are:
 Do not remove the original `/system_ex/app/NPXS40106` application or alter
 system processes to work around a remount failure.
 
-### State left when console actions were paused
+### Historical state before the coordinator's reboot
 
 - `pid=107`, name `ps5wl-launch-probe`: owned signed BigApp diagnostic, originally
   app ID `0x19`. It finished logging tick 59 but remained listed. Payload Manager
@@ -235,7 +244,123 @@ A reboot releases the stuck processes and their kernel/application state; it
 does **not** delete the persistent `PSWL00002` files. Re-establish the console's
 existing jailbreak/autoloader so elfldr and Payload Manager are serving again.
 No Payload Manager startup/config changes were made by this project. Then run
-`launcher/test.sh` to install the real compositor bundle and exercise its
-foreground route, or run `ps5wl-uninstall.elf` as documented above if removing
-the project. The final rw-only cleanup path and `_exit` diagnostic correction
-still need that fresh-session hardware run; no post-reboot result is claimed.
+`launcher/test.sh --probe` to install the bounded lifecycle diagnostic first,
+or run `ps5wl-uninstall.elf` as documented above if removing the project. The
+earlier `_exit` diagnostic change was insufficient: fresh-session evidence and
+the source-correct native lifecycle are recorded below.
+
+### Fresh-session revalidation
+
+After the coordinator's reboot, Payload Manager's process list showed neither
+old pid107 nor old pid124; fresh elfldr/manager PIDs were82/84. The following
+checks record fresh-session file state, shipping rw-only cleanup, the bounded
+diagnostic launch, and then the backend's watchdog VIDEOOUT_ONLY build.
+
+Fresh state diagnostic (`pid=86`, exit `0`, ten-second log window) observed:
+
+- Icon metadata/icon and `/user/appmeta/PSWL00001/param.json` absent (`ENOENT`).
+- `/data/ps5wl` exists; the compositor destination ELF is absent (`ENOENT`).
+- `PSWL00002/eboot.bin` exists, 3,788,603 bytes; its `sce_sys/param.json`
+  exists, 290 bytes.
+- `/system_ex` is `exfatfs` from `/dev/ssd0.system_ex`, flags `0x1041`.
+
+The shipping rw-only uninstaller then removed both system-container files
+(`unlink result=0`) and its directories (`remove BigApp directory rc=0`) without
+hanging. Its first overall result was `-1` solely because `/data/ps5wl` contains
+other components' files (`ENOTEMPTY`,66), which were deliberately retained.
+The uninstaller now logs this expected shared-directory retention without
+treating it as an owned-file removal failure; other removal errors still fail.
+
+The foreground diagnostic now also calls `sceKernelGetAppInfo(getpid(),...)`
+using Payload Manager v0.5.2 `src/process_mgr.c:19-26,63-66`'s exact natural-
+alignment layout, logging its own application ID/title and comparing its ID
+with `sceSystemServiceGetAppIdOfRunningBigApp`. This distinguishes a genuine
+BigApp execution from a background payload merely observing another BigApp.
+
+Fresh `launcher/test.sh --probe` installed the icon and target with result `0`
+and launched resident installer88 and signed diagnostic90. `sceKernelGetAppInfo`
+returned own application ID `0x19`, title `PSWL00002`; all 60 one-second ticks
+reported `own_app=0x19 running_bigapp=0x19 match=1`. No VideoOut operation ran.
+Nevertheless, the old `_exit(0)` did not remove pid90: log capture timed out
+with status124 after75 seconds, and Payload Manager's acknowledged SIGKILL
+also left90 listed. This reproduces the exit problem independently of both
+VideoOut and any read-only remount experiment.
+
+### Native-title lifecycle reference
+
+Native BigApps must ask the application manager to exit after releasing their
+resources; raw kernel `_exit` is not the native title shutdown contract:
+
+- [SDL's PS5 platform main, lines12-18](https://github.com/ps5-payload-dev/SDL/blob/release-2.30.x-ps5/src/main/ps5/SDL_ps5_main.c#L12-L18)
+  calls `sceSystemServiceLoadExec("exit",0)` after `SDL_main` returns.
+- [PS5 RetroArch `7d45412b`, lines704-725](https://github.com/mihawk-99/PS5_RetroArch/blob/7d45412b4bd163f164b07e48e15cdf1d1d2c3892/src/main.cpp#L704-L725)
+  explicitly records that kernel `exit(0)` raises SIGSYS for its native title.
+  Its return hook releases display state, requests `LoadExec("exit",nullptr)`,
+  and waits for asynchronous shell termination on a nonnegative result.
+- [PS5_Vulkan `f410e67`, deployment lifecycle](https://github.com/mihawk-99/PS5_Vulkan/blob/f410e67a0241b3e8edcdbcd2a9b285dfc4a412ed/docs/DEPLOYMENT.md)
+  and [its `close_title`, lines246-282](https://github.com/mihawk-99/PS5_Vulkan/blob/f410e67a0241b3e8edcdbcd2a9b285dfc4a412ed/payload/ps5vkctl/main.c#L246-L282)
+  use `sceLncUtilSuspendApp`, a two-second wait, SIGKILL of matching title
+  processes, then `sceLncUtilKillApp`. They verify the running title before
+  acting and wait for its application-manager registration to disappear.
+- [websrv `7748df9`, `sys_launch_title`, lines375-408](https://github.com/ps5-payload-dev/websrv/blob/7748df9d2a43822a5ebfda149f43d4f2696d640b/src/ps5/sys.c#L375-L408)
+  instead uses `sceSystemServiceKillApp(app_id,-1,0,0)` before launching the
+  next title. Unlike websrv's general launcher, this project must not close
+  arbitrary currently-running titles.
+
+`probe.c` now requests SDL-style `LoadExec("exit",NULL)` after its60 ticks.
+`app.h` centralizes the hardware-confirmed app-info layout and cited API
+declarations. `ps5wl-close.elf` is a narrowly scoped cleanup helper on log9585:
+it refuses anything except running title `PSWL00002`, suspends it, signals only
+processes whose app ID and exact title both match, invokes `sceLncUtilKillApp`,
+and reports whether the application-manager registration disappeared. A
+successful kill API return alone is not proof of PID removal. Build/deploy:
+
+```sh
+env/run make -C launcher ps5wl-close.elf
+tools/ps5ctl run launcher/ps5wl-close.elf
+tools/ps5ctl logs --port 9585 --retry 15
+tools/ps5ctl ps
+```
+
+The first cleanup run (helper91) was successful: `SuspendApp(0x19)=0`,
+`SIGKILL pid90 result=0`, `KillApp(0x19)=0`, then
+`title closed; running app_id=0xffffffff`. The following process list contained
+neither90 nor91. Installer88 was then killed through its deployment receipt;
+the first immediate test invocation correctly refused the not-yet-disappeared
+installer, and a later list showed88 absent. No reboot was needed.
+
+The corrected sixty-second diagnostic then passed (`launcher/test.sh --probe`,
+status0): installer92 launched probe94 as app `0x2019`, title `PSWL00002`.
+All60 ticks matched the running BigApp ID. At952918ms it logged
+`diagnostic complete; requesting SDL-style shell exit`; the TCP log stream
+closed without a timeout or a returned `LoadExec` error. The subsequent process
+list contained no94. This proves the bounded injected BigApp can end through
+the shell without a reboot; it does not yet prove VideoOut or interactive input.
+
+The first guarded VideoOut-only compositor run also returned status0 through
+`launcher/test.sh --elf .../build/ps5/compositor/ps5wl`: installer96 launched98
+as own/foreground app `0x4019`; SYSTEM VideoOut opened `0x4e100100`. The backend
+logged899 completed flip events over15 seconds (about59.9Hz), then bounded
+teardown: unregister returned `0x80290009`, `VideoOut closed`, waiter join,
+`DeleteEqueue rc=0`, `backend released VideoOut flips=899`, and
+`VIDEOOUT_ONLY clean teardown`. The log stream closed and the next process list
+contained no98. The unregister result is preserved, not presented as success.
+This run deliberately had no input devices, renderer, or Wayland clients.
+
+The same installed guarded artifact was then launched again through the
+loopback handler and closed while actively flipping: after a three-second
+trigger delay, helper102 observed own app `0x6019`, title `PSWL00002`, suspended
+it successfully, waited two seconds, sent SIGKILL only to matching pid101,
+and called `sceLncUtilKillApp(0x6019)` (`0`). It reported no running BigApp
+(`0xffffffff`) and status0. The next process list contained neither101 nor102.
+This verifies application-manager kill removes the injected VideoOut process;
+raw host SIGKILL alone was not used as the lifecycle test. Installer96 remains
+resident for subsequent full-compositor integration; finite trigger payloads
+retain logs for30 seconds before exiting. No system process was killed.
+
+For the second run, the backend observer captured142 actual flip events before
+termination (last seq142 at1036.642232770s); seq120 reported59.94Hz with displayed
+buffer marker120 equal to expected120. This independently confirms the cleanup
+helper was invoked during real flipping rather than merely before startup.
+
+

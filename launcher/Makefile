@@ -1,8 +1,8 @@
 REPO := $(abspath ..)
 PS5_PAYLOAD_SDK ?= $(REPO)/.sdk
-PAYLOAD ?= ps5wl-launch-probe.elf
+PAYLOAD ?= $(REPO)/build/ps5/compositor/ps5wl
 .PHONY: all clean FORCE
-all: ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-test.elf ps5wl-launch-state.elf
+all: ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-test.elf ps5wl-launch-state.elf ps5wl-close.elf
 ifeq ($(PS5WL_BUILD_ENV),1)
 CC := $(PS5_PAYLOAD_SDK)/bin/prospero-clang
 CPPFLAGS += -I$(REPO)/common/ps5log -Ivendor
@@ -10,8 +10,10 @@ CFLAGS ?= -O2 -g
 CFLAGS += -Wall -Wextra -pthread
 LDLIBS += -pthread -lkernel_sys -lSceSystemService -lSceUserService -lSceAppInstUtil
 SOURCES := main.c hbldr.c fs.c vendor/elfldr.c vendor/pt.c $(REPO)/common/ps5log/ps5log.c
-ps5wl-launch-probe.elf: probe.c $(REPO)/common/ps5log/ps5log.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDLIBS) -o $@
+ps5wl-launch-probe.elf: probe.c $(REPO)/common/ps5log/ps5log.c app.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
+ps5wl-close.elf: close.c $(REPO)/common/ps5log/ps5log.c app.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
 payload.elf: $(PAYLOAD) FORCE
 	cp $(PAYLOAD) $@
 ps5wl-launch-test.elf: trigger.c $(REPO)/common/ps5log/ps5log.c
@@ -29,4 +31,4 @@ ps5wl-install.elf ps5wl-uninstall.elf:
 	$(REPO)/env/run $(MAKE) -C $(CURDIR) all PAYLOAD=$(PAYLOAD)
 endif
 clean:
-	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf ps5wl-launch-state.elf payload.elf icon0.png
+	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf ps5wl-launch-state.elf ps5wl-close.elf payload.elf icon0.png
