@@ -73,6 +73,8 @@ def main():
                '-DPS5WL_VKTEST_LOG_PORT=' + ('9591' if target == 'ps5' else '0')]
     if driver == 'venus':
         common += ['-DPS5WL_VENUS=1']
+    if target == 'ps5' and driver == 'lavapipe':
+        common += ['-DPS5WL_VKCUBE_DEFAULT_FRAMES=600']
     libs = ['-pthread']
     if target == 'ps5':
         # Manual payload links consume the same toolchain contract as Mesa.

@@ -58,6 +58,8 @@ case "$processes" in
         exit 1
         ;;
 esac
+"$ROOT/env/run" "$ROOT/deps/mesa/build.sh" tools
+"$ROOT/env/run" "$ROOT/deps/mesa/build.sh" ps5
 "$ROOT/env/run" "$ROOT/clients/build.sh" ps5
 if [[ "$MODE" == --probe ]]; then
     "$ROOT/env/run" make -C "$ROOT/launcher" all PAYLOAD=ps5wl-launch-probe.elf

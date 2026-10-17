@@ -103,7 +103,7 @@
  
      if (demo->wayland_display == NULL) {
          return "Cannot connect to wayland.";
-@@ -5101,8 +5117,14 @@
+@@ -5101,8 +5117,17 @@
  #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
  int main(int argc, char **argv) {
      struct demo demo;
@@ -114,11 +114,14 @@
 +    }
  
      demo_init(&demo, argc, argv);
++#ifdef PS5WL_VKCUBE_DEFAULT_FRAMES
++    if (demo.frameCount == INT32_MAX) demo.frameCount = PS5WL_VKCUBE_DEFAULT_FRAMES;
++#endif
 +    ps5log("Vulkan instance and Wayland connection initialized");
      switch (demo.wsi_platform) {
          default:
          case (WSI_PLATFORM_AUTO):
-@@ -5143,14 +5165,19 @@
+@@ -5143,14 +5168,19 @@
              break;
  #endif
      }
@@ -138,7 +141,7 @@
  
      switch (demo.wsi_platform) {
          default:
-@@ -5193,6 +5220,8 @@
+@@ -5193,6 +5223,8 @@
      }
  
      demo_cleanup(&demo);

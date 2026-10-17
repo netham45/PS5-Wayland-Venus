@@ -1,0 +1,31 @@
+From: ps5wl contributors
+Subject: [PATCH] rtasm: release the executable heap when the ICD unloads
+
+Individual generated functions release their heap blocks, but the global
+u_mm heap nodes and executable mapping otherwise outlive an unloaded ICD.
+Release both after the driver's users have been destroyed.
+
+--- a/src/gallium/auxiliary/rtasm/rtasm_execmem.c
++++ b/src/gallium/auxiliary/rtasm/rtasm_execmem.c
+@@ -125,6 +125,21 @@
+    simple_mtx_unlock(&exec_mutex);
+ }
+ 
++#if defined(__GNUC__)
++static void __attribute__((destructor))
++rtasm_exec_cleanup(void)
++{
++   simple_mtx_lock(&exec_mutex);
++   u_mmDestroy(exec_heap);
++   exec_heap = NULL;
++   if (exec_mem && exec_mem != MAP_FAILED)
++      munmap(exec_mem, EXEC_HEAP_SIZE);
++   exec_mem = NULL;
++   simple_mtx_unlock(&exec_mutex);
++   simple_mtx_destroy(&exec_mutex);
++}
++#endif
++
+ 
+ #elif DETECT_OS_WINDOWS
+ 

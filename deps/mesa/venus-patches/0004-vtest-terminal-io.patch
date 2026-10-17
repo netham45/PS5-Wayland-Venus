@@ -1,0 +1,39 @@
+From: ps5wl contributors
+Subject: [PATCH] venus/vtest: terminate on EOF instead of spinning forever
+
+A zero-byte read means that the GPU server disconnected, not progress.
+Keep interrupted syscalls restartable, but do not retry EOF or other errors.
+Apply the same progress requirement to writes.
+
+--- a/src/virtio/vulkan/vn_renderer_vtest.c
++++ b/src/virtio/vulkan/vn_renderer_vtest.c
+@@ -105,10 +105,12 @@
+ {
+    do {
+       const ssize_t ret = read(vtest->sock_fd, buf, size);
+-      if (unlikely(ret < 0)) {
++      if (ret < 0 && errno == EINTR)
++         continue;
++      if (unlikely(ret <= 0)) {
+          vn_log(vtest->instance,
+                 "lost connection to rendering server on %zu read %zi %d",
+-                size, ret, errno);
++                size, ret, ret < 0 ? errno : 0);
+          abort();
+       }
+ 
+@@ -153,10 +155,12 @@
+ {
+    do {
+       const ssize_t ret = write(vtest->sock_fd, buf, size);
+-      if (unlikely(ret < 0)) {
++      if (ret < 0 && errno == EINTR)
++         continue;
++      if (unlikely(ret <= 0)) {
+          vn_log(vtest->instance,
+                 "lost connection to rendering server on %zu write %zi %d",
+-                size, ret, errno);
++                size, ret, ret < 0 ? errno : 0);
+          abort();
+       }
+ 

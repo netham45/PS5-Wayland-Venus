@@ -1,6 +1,7 @@
 REPO := $(abspath ..)
 PAYLOAD ?= $(REPO)/build/ps5/compositor/ps5wl
 DEMO ?= $(REPO)/build/ps5/clients/ps5wl-demo.elf
+VULKAN_LIBRARY ?= $(REPO)/build/ps5/sysroot/lib/libvulkan.so.1
 .PHONY: all clean FORCE
 all: ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-test.elf ps5wl-launch-state.elf ps5wl-close.elf ps5wl-launch-probe.elf
 ifeq ($(PS5WL_BUILD_ENV),1)
@@ -23,19 +24,21 @@ ps5wl-launch-diag.elf: diagnostic.c $(LOADER_SOURCES) hbldr.h fs.h diagnostic.el
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
 demo.elf: $(DEMO) FORCE
 	cp $(DEMO) $@
+vulkan.so: $(VULKAN_LIBRARY) FORCE
+	cp "$(VULKAN_LIBRARY)" $@
 ps5wl-launch-test.elf: trigger.c $(REPO)/common/ps5log/ps5log.c Makefile $(CC)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
 ps5wl-launch-state.elf: state.c $(REPO)/common/ps5log/ps5log.c Makefile $(CC)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
 icon0.png: icon.py
 	python3 $< $@
-ps5wl-install.elf: $(SOURCES) hbldr.h fs.h payload.elf demo.elf icon0.png Makefile $(CC)
+ps5wl-install.elf: $(SOURCES) hbldr.h fs.h payload.elf demo.elf vulkan.so icon0.png Makefile $(CC)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(SOURCES) $(LDLIBS) -o $@
 ps5wl-uninstall.elf: $(SOURCES) hbldr.h fs.h Makefile $(CC)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -DUNINSTALL $(SOURCES) $(LDLIBS) -o $@
 else
 ps5wl-install.elf ps5wl-uninstall.elf:
-	$(REPO)/env/run $(MAKE) -C $(CURDIR) all PAYLOAD=$(PAYLOAD) DEMO=$(DEMO)
+	$(REPO)/env/run $(MAKE) -C $(CURDIR) all PAYLOAD=$(PAYLOAD) DEMO=$(DEMO) VULKAN_LIBRARY=$(VULKAN_LIBRARY)
 endif
 clean:
-	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf ps5wl-launch-state.elf ps5wl-close.elf ps5wl-launch-diag.elf payload.elf diagnostic.elf demo.elf icon0.png
+	rm -f ps5wl-install.elf ps5wl-uninstall.elf ps5wl-launch-probe.elf ps5wl-launch-test.elf ps5wl-launch-state.elf ps5wl-close.elf ps5wl-launch-diag.elf payload.elf diagnostic.elf demo.elf vulkan.so icon0.png

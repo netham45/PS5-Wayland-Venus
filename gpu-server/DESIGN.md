@@ -393,6 +393,10 @@ host-visible type that is not importable. Device-memory blob exports carry SHM,
 never a fabricated dma-buf. Each exported resource owns a separate server
 mapping, so its lifetime is independent of vkFreeMemory; the Vulkan allocation
 owns the imported mapping and SHM descriptor until Vulkan memory destruction.
+The host-memory quota follows those backing pages: freeing an exported Vulkan
+allocation transfers its existing charge to the retained resource, and the
+charge is released only when that resource is unreferenced. Reusing a guest
+Vulkan object ID cannot overwrite an earlier retained resource's charge.
 Actual Vulkan fd-export call sites are counted in the shutdown log.
 
 Every sync wait owns a fresh pipe pair. Callback signalling and timeout handling
@@ -411,9 +415,18 @@ isolation, zero measured Vulkan fd exports, and SHM fd/mapping counts returning
 to baseline after a killed client. Logs are retained under
 `build/gpud/logs/{host,sanitize}`; no console action occurs in this harness.
 
+The sanitizer run reproduced two pinned-vkr lifetime/arithmetic defects now
+fixed by the live patch: signed `1 << 31` in extension-mask construction, and
+missing encoder/decoder finalization in `vkr_ring_destroy` (per-ring temporary
+decoder pools leaked across client teardown). The post-vkFreeMemory blob alias
+is also exercised by the render-protocol test, which writes a Venus reply
+through the still-live resource after freeing the Vulkan allocation.
+
 PS5 compile/link uses `env/run python3 gpu-server/build.py ps5`, including the
 repository `cross/bin/prospero-clang` compatibility wrappers. The static archive,
 header and `lib/pkgconfig/ps5wl-gpud.pc` install in `build/ps5/sysroot`.
+The PS5 Vulkan library default is `/data/ps5wl/libvulkan.so.1`, overridable with
+`PS5WL_VULKAN_LIBRARY`; no environment is needed in the hbldr-launched app.
 PS5 logger messages use the compositor's ps5log path. Following the C1 measured
 409 MiB flexible-memory baseline, PS5 zero-config defaults are **128 MiB of host
 memory per context and two contexts** (256 MiB total GPU SHM ceiling, excluding

@@ -34,6 +34,10 @@ installer 85 remained. The installation is left **not running**, ready for
 the user's actual icon/TV/input check. Automated HTTP triggering does not
 prove that a human selected the icon or saw the HDMI output.
 
+That console acceptance predates the native RADV asset packaging below. The
+additional installer asset is an offline source/bundle change, not evidence
+that resident85 or the currently installed library was updated.
+
 ## Build and install
 
 Run from the repository root. All compilation uses the pinned container/SDK.
@@ -42,6 +46,8 @@ The default bundle is the real compositor built at `build/ps5/compositor/ps5wl`
 renders nothing and is selected explicitly with `launcher/test.sh --probe`.
 
 ```sh
+env/run deps/mesa/build.sh tools
+env/run deps/mesa/build.sh ps5
 env/run env PS5WL_TEST_SECONDS=0 compositor/build.sh ps5
 env/run clients/build.sh ps5
 env/run make -C launcher all
@@ -96,11 +102,25 @@ tools/ps5ctl logs --port 9530 --retry 30
 ```
 
 An installer built with the compositor replaces the diagnostic ELF atomically;
-the installed destination and icon stay the same. The bundle embeds both the
-compositor and `build/ps5/clients/ps5wl-demo.elf` (override with `DEMO=/absolute/path`
-when building). It atomically writes the demo executable before its autostart
-manifest. Keyboard maps are embedded by the compositor; no external XKB data is
-needed. Other clients, including Vulkan clients, are not automatically started.
+the installed destination and icon stay the same. The bundle embeds the
+compositor, `build/ps5/clients/ps5wl-demo.elf` (override with `DEMO=/absolute/path`),
+and native RADV `build/ps5/sysroot/lib/libvulkan.so.1` (override with
+`VULKAN_LIBRARY=/absolute/path/to/libvulkan.so.1`). The existing atomic save
+routine stages the library at `/data/ps5wl/libvulkan.so.1.new` and renames it to
+`/data/ps5wl/libvulkan.so.1` before writing the autostart manifest and registering
+the icon. Installer logs report the driver byte count and final path.
+
+Build native Mesa tools and the PS5 driver first using the commands above;
+[the Mesa build notes](../deps/mesa/README.md) document the pinned prerequisites.
+The installing test modes run these same build prerequisites before clients
+and launcher packaging. The isolated `--diagnostic-elf` mode does not run them
+or touch the installed driver. Native Vulkan clients and the compositor's
+GPUD loader share this RADV path and must use the same driver build. The
+probe-only `/data/ps5wl/probe-radv.so.1` is a different asset and is not replaced.
+
+The demo executable is atomically written before its autostart manifest.
+Keyboard maps are embedded by the compositor; no external XKB data is needed.
+Other clients, including Vulkan clients, are not automatically started.
 
 The icon persists across reboot, but the resident installer does not. After a
 reboot, re-establish the jailbreak/elfldr/Payload Manager and run the installer
@@ -151,6 +171,8 @@ harness cleans up only its own host log observer and temporary host log.
 - `/user/app/PSWL00001/sce_sys/{param.json,icon0.png}`: browser icon registration.
 - `/data/ps5wl/bin/ps5wl-compositor.elf`: bundled executable.
 - `/data/ps5wl/bin/ps5wl-demo.elf`: bundled, separate interactive SHM client.
+- `/data/ps5wl/libvulkan.so.1`: bundled native RADV DSO for the compositor GPUD
+  loader and same-build native Vulkan clients.
 - `/data/ps5wl/autostart.txt`: installer-owned demo-only startup manifest.
 - `/system_ex/app/PSWL00002/{eboot.bin,sce_sys/param.json}`: unique signed BigApp
   launch container, created on first launch. `eboot.bin` is copied locally from
@@ -181,9 +203,9 @@ tools/ps5ctl logs --port 9580 --retry 30
 ```
 
 The uninstall payload unregisters `PSWL00001`, removes the icon files, bundled
-compositor/demo executables, autostart manifest and their `.new` staging files,
-and removes the unique BigApp launch container. It removes empty
-`/data/ps5wl/bin` and `/data/ps5wl` directories; unrelated files are retained and
+compositor/demo executables, native `libvulkan.so.1`, autostart manifest and
+their `.new` staging files, and removes the unique BigApp launch container.
+It removes empty `/data/ps5wl/bin` and `/data/ps5wl` directories; unrelated files are retained and
 explicitly logged, not recursively deleted. Remove separately installed runtime
 assets using their owning component's uninstall procedure.
 Check `uninstall complete rc=0`. After the uninstall payload exits (30-second

@@ -55,6 +55,10 @@ The PS5 build requires `build/ps5/sysroot/lib/pkgconfig/wlroots-0.20.pc`,
 `build/ps5/sysroot/lib/pkgconfig/ps5wl-gpud.pc` and `build/ps5/cross.ini`.
 The dependency build produces wlroots/cross configuration; the GPU-server build
 installs the in-process GPU daemon archive and package metadata.
+The pinned runtime Vulkan driver is `build/ps5/sysroot/lib/libvulkan.so.1`;
+the GPU server loads it lazily from `/data/ps5wl/libvulkan.so.1` on the console.
+Regular builds also import the SDK's `SceAgc` and `SceAgcDriver` modules, matching
+the native GPU probes; the isolated VideoOut build does not add those imports.
 The PS5 build uses the SDK prospero compiler/cross configuration and static
 dependency linking, producing
 `build/ps5/compositor/ps5wl`. Missing dependencies fail with the required next

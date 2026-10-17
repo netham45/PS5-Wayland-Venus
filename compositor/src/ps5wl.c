@@ -1043,6 +1043,12 @@ static void virtual_pointer_created(struct wl_listener *listener, void *data) {
 		(wl_list_empty(&server->keyboards) ? 0 : WL_SEAT_CAPABILITY_KEYBOARD));
 }
 #endif
+static void destroy_backend(struct wlr_backend *backend) {
+#if defined(PS5WL_PS5) && !PS5WL_VIDEOOUT_ONLY
+	stop_gpu_daemon();
+#endif
+	wlr_backend_destroy(backend);
+}
 static int compositor_main(int argc, char *argv[]) {
 #ifdef PS5WL_PS5
 	if (ps5log_init("ps5wl-compositor", 9530)) return 1;
@@ -1151,16 +1157,16 @@ static int compositor_main(int argc, char *argv[]) {
 	}
 #if defined(PS5WL_PS5) && PS5WL_VIDEOOUT_ONLY
 	if (!wlr_backend_start(server.backend)) {
-		wlr_backend_destroy(server.backend); return 1;
+		destroy_backend(server.backend); return 1;
 	}
 	struct wl_event_source *stage_timeout = wl_event_loop_add_timer(loop,
 		terminate_validation, server.wl_display);
 	if (!stage_timeout || wl_event_source_timer_update(stage_timeout, PS5WL_TEST_SECONDS * 1000)) {
-		wlr_backend_destroy(server.backend); return 1;
+		destroy_backend(server.backend); return 1;
 	}
 	ps5log("VIDEOOUT_ONLY running %ds; no clients, input or renderer", PS5WL_TEST_SECONDS);
 	wl_display_run(server.wl_display);
-	wlr_backend_destroy(server.backend);
+	destroy_backend(server.backend);
 	wl_event_source_remove(stage_timeout);
 	wl_event_source_remove(sigint); wl_event_source_remove(sigterm);
 	wl_display_destroy(server.wl_display);
@@ -1175,7 +1181,7 @@ static int compositor_main(int argc, char *argv[]) {
 	server.renderer = wlr_renderer_autocreate(server.backend);
 	if (server.renderer == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_renderer");
-		wlr_backend_destroy(server.backend);
+		destroy_backend(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
@@ -1191,7 +1197,7 @@ static int compositor_main(int argc, char *argv[]) {
 	if (server.allocator == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_allocator");
 		wlr_renderer_destroy(server.renderer);
-		wlr_backend_destroy(server.backend);
+		destroy_backend(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
@@ -1314,14 +1320,14 @@ static int compositor_main(int argc, char *argv[]) {
 		socket = wl_display_add_socket_auto(server.wl_display);
 	}
 	if (!socket) {
-		wlr_backend_destroy(server.backend);
+		destroy_backend(server.backend);
 		return 1;
 	}
 
 	/* Start the backend. This will enumerate outputs and inputs, become the DRM
 	 * master, etc */
 	if (!wlr_backend_start(server.backend)) {
-		wlr_backend_destroy(server.backend);
+		destroy_backend(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
@@ -1394,7 +1400,7 @@ static int compositor_main(int argc, char *argv[]) {
 	wlr_cursor_destroy(server.cursor);
 	wlr_allocator_destroy(server.allocator);
 	wlr_renderer_destroy(server.renderer);
-	wlr_backend_destroy(server.backend);
+	destroy_backend(server.backend);
 	wl_display_destroy(server.wl_display);
 #ifdef PS5WL_PS5
 	ps5log("compositor clean shutdown");

@@ -152,3 +152,24 @@ Observed after this patch: all four cycles enumerated one physical device
 and the ASan/LeakSanitizer process exited 0 with `detect_leaks=1`, without
 preloading the ICD or suppressing leaks. Host and PS5 Venus drivers and the
 PS5 client payloads were rebuilt successfully with the cleanup applied.
+
+## Vtest disconnect regression
+
+`venus-patches/0004-vtest-terminal-io.patch` makes zero-byte socket reads and
+writes fatal transport failures instead of allowing a no-progress loop.
+Interrupted syscalls resume; EOF and other errors do not trigger reconnects.
+`env/run python3 deps/mesa/tests/vtest-eof.py` runs the real host Venus
+readback client against a local socket peer, drains its initialization
+requests, then closes the peer's write half. The test requires an EOF
+diagnostic and client termination within five seconds, not a harness kill.
+Set `LD_LIBRARY_PATH=$PWD/build/host/sysroot/lib` for pinned host libraries.
+Observed with the EOF patch: the real client emitted
+`lost connection to rendering server on 8 read 0 0` and exited with SIGABRT
+within the five-second deadline; the regression exited 0. It enables
+`MESA_LOG_LEVEL=debug` because Venus transport diagnostics use Mesa's debug
+log level.
+
+`venus-patches/0005-rtasm-unload.patch` similarly releases the runtime
+assembler's global `u_mm` heap and its 10-MiB executable mapping at ICD unload.
+The simple enumeration regression does not exercise that graphics shader
+path; the GPU server's cube-under-LeakSanitizer test covers its teardown.

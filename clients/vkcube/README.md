@@ -58,6 +58,10 @@ needed for that variant. The host presentation harness accepts
 `--driver venus` with an already running private GPU server named by
 `VTEST_SOCKET_NAME`. Both harness variants require 120 client presents and
 120 compositor wl_shm commits, not just Vulkan instance creation.
+Only the PS5 lavapipe cube defaults to 600 frames, using
+`PS5WL_VKCUBE_DEFAULT_FRAMES=600`, so argv-less elfldr launches are bounded.
+Explicit `--c` still overrides that default. Other variants keep their
+interactive default; host acceptance keeps its explicit 120-frame limit.
 
 
 ## Console sequence

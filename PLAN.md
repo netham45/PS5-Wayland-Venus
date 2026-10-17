@@ -48,6 +48,9 @@ Every claim about the console is either cited evidence or marked
   that keyboard typing/Backspace, mouse dragging and DualSense pointer/drawing
   work, and that Ctrl+Alt+Backspace / Options+Create return to the PS5 UI.
   Evidence: `build/ps5/evidence/final-*.log`, `final-demo.png`.
+- **LKL changes deferred (user, 2026-10-16):** no edits to `~/lkl-freebsd`.
+  GPU milestone G5 (LKL virtio-gpu device) waits; `gpu-server/render` and
+  `gpu-server/render/LKL-DEVICE.md` are the prepared interface.
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.

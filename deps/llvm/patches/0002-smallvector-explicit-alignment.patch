@@ -1,0 +1,18 @@
+From: ps5wl contributors
+Subject: [PATCH] ADT: state SmallVector element alignment on the complete class
+
+The PS5 ABI does not propagate an over-aligned empty storage base's alignment
+into the derived SmallVector<T,0>. Keep all upstream layout assertions enabled;
+state both required alignments on the complete class instead. Multiple alignas
+specifiers select the stricter alignment, so byte-sized elements still retain
+the header's natural alignment. Ordinary host layouts remain unchanged.
+
+--- a/llvm/include/llvm/ADT/SmallVector.h
++++ b/llvm/include/llvm/ADT/SmallVector.h
+@@ -1181,4 +1181,5 @@
+ template <typename T,
+           unsigned N = CalculateSmallVectorDefaultInlinedElements<T>::value>
+-class LLVM_GSL_OWNER SmallVector : public SmallVectorImpl<T>,
++class alignas(SmallVectorImpl<T>) alignas(T) LLVM_GSL_OWNER SmallVector
++    : public SmallVectorImpl<T>,
+                                    SmallVectorStorage<T, N> {

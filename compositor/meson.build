@@ -21,10 +21,13 @@ if meson.is_cross_build()
     'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c',
     'src/backend/ps5/safety.c', '../common/ps5log/ps5log.c']
   includes += include_directories('../common/ps5log')
+  cc = meson.get_compiler('c')
   if not get_option('videoout_only')
     deps += dependency('ps5wl-gpud', static: true)
+    foreach lib : ['SceAgc', 'SceAgcDriver']
+      deps += cc.find_library(lib)
+    endforeach
   endif
-  cc = meson.get_compiler('c')
   mouse_import = shared_library('SceMouse', 'src/backend/ps5/mouse-stub.c',
     c_args: ['-ffreestanding', '-fno-builtin'],
     link_args: ['-nostdlib', '-nodefaultlibs', '-nostartfiles',

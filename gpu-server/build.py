@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / 'build/gpud'
@@ -24,6 +25,10 @@ def main():
         p.error('run through env/run')
     pin = next(x for x in json.loads((ROOT/'deps/versions.lock.json').read_text())['dependencies'] if x['name']=='virglrenderer')
     archive = ROOT/'.cache/deps'/pin['archive']
+    if not archive.exists():
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(pin['url'], timeout=120) as response, archive.open('wb') as output:
+            shutil.copyfileobj(response, output)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != pin['sha256']:
         raise RuntimeError('virglrenderer archive checksum mismatch')
     src = BASE/'sources'/pin['source_dir']

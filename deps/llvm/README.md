@@ -26,6 +26,12 @@ math through its default libc link and has no separate libm archive; the
 unmodified configure otherwise misreports headers/functions as missing because
 each probe fails to link `-lm`.
 
+`0002-smallvector-explicit-alignment.patch` retains those assertions and states
+the element and header alignment requirements on `SmallVector` itself. The
+unmodified PS5 cross compile failed both over-aligned zero-capacity assertions
+(`alignof` 8 rather than 16/32). The change addresses the empty-base layout,
+instead of hiding the compiler's diagnostic.
+
 The pinned Mesa 26.2.0 `meson.build:2039-2050` accepts LLVM >=8 for X86 MCJIT.
 ORCJIT requires >=15; this variant deliberately selects `llvm-orcjit=false` on
 both platforms. LLVM still builds its ORC support libraries, but lavapipe uses
@@ -59,3 +65,18 @@ JIT syscalls, alias mappings, executable file mappings, MAP_FIXED placement or
 RWX override is introduced. The upstream manager is retained rather than
 adding a second allocator. Payload-specific execution remains a console
 acceptance test; source review is not runtime evidence.
+
+## Observed host acceptance (2026-10-16)
+
+`env/run python3 deps/llvm/build.py host` completed (exit 0).
+`env/run python3 deps/mesa/lavapipe.py host` completed (exit 0), producing
+`build/mesa/host-lavapipe/sysroot/lib/libvulkan_lvp.so`. `readelf -d` shows no
+LLVM shared-library dependency: LLVM is linked from its X86 static archives.
+
+After `env/run clients/vkcube/build.sh host --driver lavapipe`, the command
+`env/run python3 clients/vkcube/smoke.py --driver lavapipe` exited 0. It selected
+`llvmpipe (LLVM 14.0.6, 256 bits), type: Cpu`, logged
+`vkcube presented frame=120` and `vkcube exit frames=120 validation_error=0`.
+The independently captured headless ps5wl log reported `Created shm allocator`
+and `client surface committed 500x500 count=120`. No GPU server was launched.
+

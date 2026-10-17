@@ -28,6 +28,7 @@
 #ifndef UNINSTALL
 ASSET(payload, "payload.elf");
 ASSET(demo_payload, "demo.elf");
+ASSET(vulkan_payload, "vulkan.so");
 static const char autostart[] = ROOT "/bin/ps5wl-demo.elf\n";
 ASSET(icon, "icon0.png");
 static const char param[] = "{\"titleId\":\"" TITLE "\",\"applicationCategoryType\":65536,"
@@ -75,11 +76,14 @@ static int install(void) {
  if (directory(ROOT) || directory(ROOT "/bin") || directory(APP) || directory(APP "/sce_sys")) return -1;
  if (save(TARGET, payload, payload_end-payload) ||
      save(ROOT "/bin/ps5wl-demo.elf", demo_payload, demo_payload_end-demo_payload) ||
+     save(ROOT "/libvulkan.so.1", vulkan_payload, vulkan_payload_end-vulkan_payload) ||
      save(ROOT "/autostart.txt", autostart, sizeof(autostart)-1) ||
      save(APP "/sce_sys/param.json", param, sizeof(param)-1) ||
      save(APP "/sce_sys/icon0.png", icon, icon_end-icon)) return -1;
  ps5log("installed demo bytes=%zu autostart=%s", (size_t)(demo_payload_end-demo_payload),
         ROOT "/bin/ps5wl-demo.elf");
+ ps5log("installed Vulkan driver bytes=%zu path=%s", (size_t)(vulkan_payload_end-vulkan_payload),
+        ROOT "/libvulkan.so.1");
  uint32_t handle;
  int (*install_dir)(const char *, const char *, void *) = NULL;
  if (!kernel_dynlib_handle(-1, "libSceAppInstUtil.sprx", &handle))
@@ -167,6 +171,7 @@ int main(void) {
  {
   const char *files[]={APP "/sce_sys/icon0.png", APP "/sce_sys/param.json", TARGET, TARGET ".new",
    ROOT "/bin/ps5wl-demo.elf", ROOT "/bin/ps5wl-demo.elf.new",
+   ROOT "/libvulkan.so.1", ROOT "/libvulkan.so.1.new",
    ROOT "/autostart.txt", ROOT "/autostart.txt.new"};
   for(size_t i=0;i<sizeof(files)/sizeof(files[0]);i++) if(unlink(files[i]) && errno!=ENOENT) { ps5log("unlink %s errno=%d",files[i],errno); rc=-1; }
   const char *dirs[]={APP "/sce_sys",APP,ROOT "/bin",ROOT};

@@ -20,19 +20,23 @@
  #endif /* EMULATED_THREADS_H_INCLUDED_ */
 --- a/src/venus/vkr_library.c
 +++ b/src/venus/vkr_library.c
-@@ -41,8 +41,9 @@
+@@ -41,8 +41,13 @@
     if (lib->handle)
        return true;
  
 -   lib->handle = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
 -   if (lib->handle == NULL)
 +   const char *path = getenv("PS5WL_VULKAN_LIBRARY");
++#ifdef PS5WL_PS5
++   if (!path)
++      path = "/data/ps5wl/libvulkan.so.1";
++#endif
 +   lib->handle = dlopen(path ? path : "libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
 +   if (lib->handle == NULL && !path)
        lib->handle = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
     if (lib->handle == NULL) {
        vkr_log("failed to open libvulkan: %s", dlerror());
-@@ -57,6 +58,11 @@
+@@ -57,6 +62,11 @@
     /* ISO C forbids conversion of object pointer to function pointer type */
     lib->GetInstanceProcAddr =
        (PFN_vkGetInstanceProcAddr)dlsym(lib->handle, "vkGetInstanceProcAddr");
@@ -317,16 +321,17 @@
  }
  
  static void
-@@ -494,6 +524,8 @@
+@@ -494,6 +524,9 @@
        vkr_gbm_bo_destroy(mem->gbm_bo);
     if (mem->udmabuf_fd >= 0)
        close(mem->udmabuf_fd);
 +   vkr_shmem_release(mem->shmem_fd, mem->shmem_ptr, mem->shmem_size);
-+   gpud_memory_release(mem->quota_ctx, mem->shmem_ptr != NULL, mem->allocation_size);
++   gpud_memory_free(mem->quota_ctx, mem->base.id, mem->shmem_ptr != NULL,
++                    mem->allocation_size);
  }
  
  bool
-@@ -525,6 +557,25 @@
+@@ -525,6 +558,25 @@
        /* XXX guessed */
        map_info = (coherent && cached) ? VIRGL_RENDERER_MAP_CACHE_CACHED
                                        : VIRGL_RENDERER_MAP_CACHE_WC;
@@ -352,7 +357,7 @@
     }
  
     const bool can_export_dma_buf = mem->valid_fd_types & (1 << VIRGL_RESOURCE_FD_DMABUF);
-@@ -586,6 +637,7 @@
+@@ -586,6 +638,7 @@
           .memory = mem->base.handle.device_memory,
           .handleType = handle_type,
        };
@@ -564,3 +569,14 @@
  
     /* If memory might get exported, store a dup'ed fd in vkr_resource for:
      * - vkAllocateMemory for dma_buf import
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -169,6 +169,8 @@
+    assert(!ring->started);
+    mtx_destroy(&ring->mutex);
+    cnd_destroy(&ring->cond);
++   vkr_cs_encoder_fini(&ring->encoder);
++   vkr_cs_decoder_fini(&ring->decoder);
+    free(ring->cmd);
+    free(ring);
+ }

@@ -18,7 +18,7 @@
 #include "ps5log.h"
 #endif
 
-struct resource { uint32_t id; uint64_t shm_bytes; struct resource *next; };
+struct resource { uint32_t id; uint64_t blob, shm_bytes; struct resource *next; };
 struct context { uint32_t id; uint64_t host_bytes, device_bytes; unsigned allocations; struct resource *resources; gpud_retire_fn retire; void *opaque; struct context *next; };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cb_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -53,14 +53,30 @@ bool gpud_memory_reserve(uint32_t id, bool host, uint64_t bytes)
     pthread_mutex_unlock(&cb_lock);
     return ok;
 }
-void gpud_memory_release(uint32_t id, bool host, uint64_t bytes)
+void gpud_memory_free(uint32_t id, uint64_t blob, bool host, uint64_t bytes)
 {
     pthread_mutex_lock(&cb_lock);
     for (struct context *c = contexts; c; c = c->next) if (c->id == id) {
+        /* An exported resource keeps the same SHM pages alive after vkFreeMemory.
+         * Transfer its charge instead of permitting allocations to bypass the quota.
+         * Ignore already charged entries if the guest reuses a Vulkan object ID. */
+        if (host && blob) {
+            for (struct resource *r = c->resources; r; r = r->next) {
+                if (r->blob == blob && !r->shm_bytes) {
+                    r->shm_bytes = bytes;
+                    pthread_mutex_unlock(&cb_lock);
+                    return;
+                }
+            }
+        }
         uint64_t *used = host ? &c->host_bytes : &c->device_bytes;
         *used -= bytes; c->allocations--; break;
     }
     pthread_mutex_unlock(&cb_lock);
+}
+void gpud_memory_release(uint32_t id, bool host, uint64_t bytes)
+{
+    gpud_memory_free(id, 0, host, bytes);
 }
 static void retire(uint32_t id, uint32_t ring, uint64_t fence)
 {
@@ -160,8 +176,10 @@ int gpud_core_blob(uint32_t ctx, uint32_t res, uint64_t blob, uint64_t size,
         if (!blob) gpud_memory_release(ctx, true, size);
         free(entry);
     } else {
-        entry->id = res; entry->shm_bytes = blob ? 0 : size;
+        entry->id = res; entry->blob = blob; entry->shm_bytes = blob ? 0 : size;
+        pthread_mutex_lock(&cb_lock);
         entry->next = c->resources; c->resources = entry;
+        pthread_mutex_unlock(&cb_lock);
     }
 out:
     pthread_mutex_unlock(&lock);
@@ -173,10 +191,13 @@ void gpud_core_unref(uint32_t ctx, uint32_t res)
     vkr_renderer_destroy_resource(ctx, res);
     struct context *c = contexts;
     while (c && c->id != ctx) c = c->next;
+    pthread_mutex_lock(&cb_lock);
     struct resource **p = c ? &c->resources : NULL;
     while (p && *p && (*p)->id != res) p = &(*p)->next;
-    if (p && *p) {
-        struct resource *entry = *p; *p = entry->next;
+    struct resource *entry = p ? *p : NULL;
+    if (entry) *p = entry->next;
+    pthread_mutex_unlock(&cb_lock);
+    if (entry) {
         if (entry->shm_bytes) gpud_memory_release(ctx, true, entry->shm_bytes);
         free(entry);
     }
@@ -199,7 +220,10 @@ int ps5wl_gpud_start(const struct ps5wl_gpud_config *config)
     if (!path) path = PS5WL_GPUD_VTEST_PATH;
     int result = gpud_vtest_start(path);
     if (!result) result = gpud_render_start(config->render_path ? config->render_path : PS5WL_GPUD_RENDER_PATH);
-    if (result) { gpud_vtest_shutdown(); gpud_vtest_drain(1000); started = false; vkr_renderer_fini(); }
+    if (result) {
+        int drain_result = ps5wl_gpud_stop(1000);
+        if (drain_result) return drain_result;
+    }
     return result;
 }
 int ps5wl_gpud_stop(unsigned drain_ms)

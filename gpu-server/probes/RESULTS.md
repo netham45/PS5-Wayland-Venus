@@ -1,11 +1,12 @@
 # GPU console probes C1 / C2
 
-Status: **C1 complete with a 409 MiB app-flexible-memory limit; C2a 16 KiB
-GPU fill and cross-process verification PASS**. App SHM counts against that
-pool. A 1 GiB map failed ENOMEM; Main classified that as the expected §6 quota
-gate and authorized the remaining C1 items, then C2, within measured headroom.
-Each run still requires Backend's grant. Firmware was not queried by these
-probes; process contexts below are from actual runs.
+Status: **C1, all three C2a sizes, and C2b completed.** Shared-SHM GPU import,
+GPU writes/readback, cross-process coherence, and in-app shared RADV execution
+passed. **App flexible headroom at the measured baseline was only 428,867,584
+bytes (409 MiB); SHM is counted against it.** The 1 GiB map failed ENOMEM.
+Main treated this as the expected §6 quota gate and authorized the remaining
+measurements; it was not retried. All runs had separate Backend grants.
+Firmware was not queried by these probes; contexts below are from actual runs.
 
 ## Build evidence
 
@@ -32,12 +33,18 @@ Artifacts under `build/ps5/gpu-probes/`:
 - `ps5wl-gpu-c2-verify.elf`: log port 9594.
 - `ps5wl-gpu-c2b.elf`: log port 9530; 30 s watchdog; native shell exit.
 
-C1 artifact SHA256 (watchdog build):
+Artifact SHA256 at the corresponding granted runs (historical C1 artifacts may
+differ from later rebuilt debug binaries):
 
 ```text
 532379d3b145c3e45f4861743c3d43bbcf55d87f49068496966dff169273b72b  ps5wl-gpu-c1-plain.elf
 303b7d9d509ba740ba60cf68a9188e207a57f06ad7eb0f93924fe7fdd9eeabcb  ps5wl-gpu-c1-app.elf
 89ec98e583af43889f9f4aff23d4f0fa4207fdb7bdcca823267b4720da5c2a2d  ps5wl-gpu-c1-remaining.elf
+b2dceb75a4a7d0f9fbfcc0fe3b6ff23f5862877deb3ad4f5e2c093bf57bc9b6f  ps5wl-gpu-c2a-16384.elf
+fea6c61c52f44763842613d71bed734ab050163f1e07237e310a8530b978f279  ps5wl-gpu-c2a-8388608.elf
+db2b17258260d10818ea1cc929b507a19e918388489dc9553cd0b9164d56627d  ps5wl-gpu-c2a-67108864.elf
+c326221d43270827061a0c42b216e85f43d121512c8cfdd4d9fdcb8f520d3b11  ps5wl-gpu-c2-verify.elf
+69976f37d4a8713362133277ab99c9a6f9e48153e6980ac5ba05d63049b757a6  ps5wl-gpu-c2b.elf
 ```
 
 The app probes do not use VideoOut, process creation, or budget-changing APIs.
@@ -50,7 +57,7 @@ rather than freeing live pages or calling an unbounded `vkDeviceWaitIdle`.
 
 Ps5Backend owns the console and grants **one exact run at a time** after a fresh
 process check. Do not run any artifact merely because it built. Stop the ladder
-at the first unexpected result. Plain C1 and the first app C1 run have completed.
+at the first unexpected result. Every required C1/C2 measurement is now recorded.
 
 The first request is C1 plain, using `tools/ps5ctl run` and a bounded port-9592
 log pull. Backend initially withheld the grant because normal compositor PID 91
@@ -85,9 +92,9 @@ foreground app context, deadline, or LoadExec exit.
 | C1 plain | AF_UNIX SOCK_SEQPACKET socketpair and one-byte transfer | PASS | `rc=0 errno=0`; `send=1 recv=1 byte=0x51` |
 | C1 app | AF_UNIX SOCK_SEQPACKET socketpair and one-byte transfer | PASS | `rc=0 errno=0`; `send=1 recv=1 byte=0x51` |
 | C2a | 16 KiB imported SHM GPU fill / 2 s fence / CPU readback / second-payload verification | PASS | fence `0`; both 4096-word readbacks `mismatches=0`; native and host pair PASS |
-| C2a | 8 MiB imported SHM GPU fill / 2 s fence / both readbacks | NOT RUN — gated by smaller size | No hardware log |
-| C2a | 64 MiB imported SHM GPU fill / 2 s fence / both readbacks | NOT RUN — gated by smaller size | No hardware log |
-| C2b app | RADV device / R32_UINT image clear / copy to imported 16 KiB SHM / 2 s fence / readback, no VideoOut | NOT RUN — gated by C2a | No hardware log |
+| C2a | 8 MiB imported SHM GPU fill / 2 s fence / both readbacks | PASS | fence `0`; both 2097152-word readbacks `mismatches=0`; native and host pair PASS |
+| C2a | 64 MiB imported SHM GPU fill / 2 s fence / both readbacks | PASS | fence `0`; both 16777216-word readbacks `mismatches=0`; native and host pair PASS |
+| C2b app | RADV device / R32_UINT image clear / copy to imported 16 KiB SHM / 2 s fence / readback, no VideoOut | PASS | device/import/submit/fence `0`; all 4096 words `mismatches=0`; native and lifecycle PASS |
 
 C2a fills the complete allocation with `0x1a2b3c4d`. The second payload receives
 the **same SHM_ANON fd** through SCM_RIGHTS at
@@ -269,15 +276,126 @@ The `errno` fields beside successful mmap pointers are stale libc errno values:
 the returned pointers are valid, neither mmap returned MAP_FAILED, and both
 readbacks passed. Only a failed operation's errno is an error result.
 
+## C2a 8 MiB exact hardware evidence
+
+Granted command: `python3 gpu-server/probes/run-c2a.py 8388608`.
+Full capture: `build/ps5/gpu-probes/c2a-8388608.log`. Runner exit **0**, elapsed
+**9.32 s**; both uploads, both launches, and both log pulls returned **0**.
+One final process check exited 0: producer 107 and verifier 108 absent;
+normal compositor 102, demo 103 and installer 85 intact.
+
+```text
+[3059161 ms] ps5wl-gpu-c2a: plain context pid=107 app_rc=0x0 own_app=0x0 foreground=0x8019
+[3060480 ms] ps5wl-gpu-c2a: device=PlayStation 5 GPU (RADV NAVI21) host-pointer alignment=16384
+[3060481 ms] ps5wl-gpu-c2a: pCreateDevice(physical, &dci, NULL, &device) result=0
+[3060481 ms] ps5wl-gpu-c2a: SHM_ANON MAP_SHARED fd=13 bytes=8388608 ptr=204200000 errno=32
+[3060483 ms] ps5wl-gpu-c2a: import pointer-types=0x20 buffer-types=0x7ad type=5 allocation-size=8388608 SHM-size=8388608
+[3060483 ms] ps5wl-gpu-c2a: pAllocateMemory(device, &mai, NULL, &memory) result=0
+[3060485 ms] ps5wl-gpu-c2a: pQueueSubmit(queue, 1, &submit, fence) result=0
+[3060485 ms] ps5wl-gpu-c2a: vkWaitForFences timeout_ns=2000000000 result=0
+[3060486 ms] ps5wl-gpu-c2a: readback bytes=8388608 words=2097152 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3060869 ms] ps5wl-gpu-c2-verifier: second process pid=108 SCM_RIGHTS fd=9 MAP_SHARED bytes=8388608 ptr=20087c000 errno=3
+[3060871 ms] ps5wl-gpu-c2-verifier: readback bytes=8388608 words=2097152 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3060871 ms] ps5wl-gpu-c2-verifier: C2 cross-process RESULT PASS code=0
+[3060871 ms] ps5wl-gpu-c2a: second-process acknowledgement=0x50 result=0
+[3060890 ms] ps5wl-gpu-c2a: C2 RESULT PASS code=0 wedged=0
+HOST command returncode=0
+HOST producer log returncode=0
+HOST C2a PAIR PASS
+```
+
+## C2a 64 MiB exact hardware evidence
+
+Granted command: `python3 gpu-server/probes/run-c2a.py 67108864`.
+Full capture: `build/ps5/gpu-probes/c2a-67108864.log`. Runner exit **0**, elapsed
+**9.12 s**; both uploads, both launches and both log pulls returned **0**.
+One final process check exited 0: producer 110 and verifier 111 absent;
+normal compositor 102, demo 103 and installer 85 intact.
+
+```text
+[3182996 ms] ps5wl-gpu-c2a: plain context pid=110 app_rc=0x0 own_app=0x0 foreground=0x8019
+[3184217 ms] ps5wl-gpu-c2a: device=PlayStation 5 GPU (RADV NAVI21) host-pointer alignment=16384
+[3184217 ms] ps5wl-gpu-c2a: pCreateDevice(physical, &dci, NULL, &device) result=0
+[3184217 ms] ps5wl-gpu-c2a: SHM_ANON MAP_SHARED fd=13 bytes=67108864 ptr=204800000 errno=32
+[3184236 ms] ps5wl-gpu-c2a: import pointer-types=0x20 buffer-types=0x7ad type=5 allocation-size=67108864 SHM-size=67108864
+[3184240 ms] ps5wl-gpu-c2a: pAllocateMemory(device, &mai, NULL, &memory) result=0
+[3184242 ms] ps5wl-gpu-c2a: pQueueSubmit(queue, 1, &submit, fence) result=0
+[3184244 ms] ps5wl-gpu-c2a: vkWaitForFences timeout_ns=2000000000 result=0
+[3184252 ms] ps5wl-gpu-c2a: readback bytes=67108864 words=16777216 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3184635 ms] ps5wl-gpu-c2-verifier: second process pid=111 SCM_RIGHTS fd=9 MAP_SHARED bytes=67108864 ptr=201024000 errno=3
+[3184645 ms] ps5wl-gpu-c2-verifier: readback bytes=67108864 words=16777216 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3184645 ms] ps5wl-gpu-c2-verifier: C2 cross-process RESULT PASS code=0
+[3184645 ms] ps5wl-gpu-c2a: second-process acknowledgement=0x50 result=0
+[3184673 ms] ps5wl-gpu-c2a: C2 RESULT PASS code=0 wedged=0
+HOST command returncode=0
+HOST producer log returncode=0
+HOST C2a PAIR PASS
+```
+
+All three required C2a sizes therefore passed GPU-write/CPU-read coherence both
+in the producer and through a separately mapped SCM_RIGHTS SHM fd in another
+process, while the ordinary compositor remained foreground. This is not an
+all-flexible-BO allocator experiment and does not settle optional option f.
+
+## C2b BigApp exact hardware evidence
+
+Backend closed only its owned normal compositor using the shipping helper
+before granting this diagnostic. Granted command:
+
+```sh
+launcher/test.sh --diagnostic-elf build/ps5/gpu-probes/ps5wl-gpu-c2b.elf
+```
+
+Full pipefail-enabled combined capture: `build/ps5/gpu-probes/c2b.log`.
+Harness exit **0**, elapsed **13.09 s**; native **`PASS code=0 wedged=0`**;
+driver **`result=0`**, both log observers reached EOF. One final process check
+exited 0: app 115 and driver 114 absent; only installer 85 among project
+processes, no compositor/demo. The stable installed target and resident
+installer were not replaced. As in C1, shell termination preceded any captured
+LoadExec return-code line; child disappearance is the observed exit evidence.
+
+```text
+[3296964 ms] ps5wl-gpu-c2b: context pid=115 app_rc=0x0 own_app=0xa019 foreground=0xa019
+[3298052 ms] ps5wl-gpu-c2b: RADV dlopen handle=880771160 error=none
+[3298053 ms] ps5wl-gpu-c2b: pCreateInstance(&ici, NULL, &instance) result=0
+[3298053 ms] ps5wl-gpu-c2b: pEnumeratePhysicalDevices(instance, &count, &physical) result=0
+[3298053 ms] ps5wl-gpu-c2b: device=PlayStation 5 GPU (RADV NAVI21) host-pointer alignment=16384
+[3298053 ms] ps5wl-gpu-c2b: pCreateDevice(physical, &dci, NULL, &device) result=0
+[3298053 ms] ps5wl-gpu-c2b: SHM_ANON MAP_SHARED fd=15 bytes=16384 ptr=202ae8000 errno=32
+[3298053 ms] ps5wl-gpu-c2b: import pointer-types=0x20 buffer-types=0x7ad type=5 allocation-size=16384 SHM-size=16384
+[3298053 ms] ps5wl-gpu-c2b: pAllocateMemory(device, &mai, NULL, &memory) result=0
+[3298053 ms] ps5wl-gpu-c2b: pBindBufferMemory(device, buffer, memory, 0) result=0
+[3298053 ms] ps5wl-gpu-c2b: pCreateImage(device, &image_info, NULL, &image) result=0
+[3298053 ms] ps5wl-gpu-c2b: pAllocateMemory(device, &mai, NULL, &image_memory) result=0
+[3298053 ms] ps5wl-gpu-c2b: pBindImageMemory(device, image, image_memory, 0) result=0
+[3298056 ms] ps5wl-gpu-c2b: pQueueSubmit(queue, 1, &submit, fence) result=0
+[3298056 ms] ps5wl-gpu-c2b: vkWaitForFences timeout_ns=2000000000 result=0
+[3298056 ms] ps5wl-gpu-c2b: readback bytes=16384 words=4096 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3298090 ms] ps5wl-gpu-c2b: C2 RESULT PASS code=0 wedged=0
+[3296099 ms] ps5wl-launch-diag: isolated driver pid=114 auth_rc=0 bytes=21533496
+[3296724 ms] ps5wl-launch-diag: sceSystemServiceLaunchApp title=PSWL00002 user=437284342 rc=0xa019
+[3296786 ms] ps5wl-launch-diag: diagnostic launch child=115 errno=0 staging_unlink=0 errno=0
+[3303293 ms] ps5wl-launch-diag: diagnostic child=115 disappeared
+[3303293 ms] ps5wl-launch-diag: diagnostic result=0 child=115
+```
+
+The app path recorded a 64×64 R32_UINT image clear, image-to-buffer copy, and
+transfer-to-host barrier; the imported SHM buffer contained all 4096 expected
+words. There is no VideoOut use in the diagnostic. This demonstrates RADV
+device initialization and successful GPU execution in the hbldr BigApp; a
+separate explicit `sceAgcInit` return was not instrumented or claimed.
+
 ## PLAN.md §6 decision gates
 
 | Gate | Outcome |
 | --- | --- |
-| BigApp SHM mprotect fails → private imports plus server-side memcpy | NOT TRIGGERED: 16 KiB shared mapping mprotect passed; actual Vulkan import/GPU access remains C2 |
+| BigApp SHM mprotect fails → private imports plus server-side memcpy | NOT TRIGGERED: C1 shared mprotect and C2b imported-SHM GPU readback passed; keep the shared host-import design |
 | Flexible headroom below 1 GiB → lower host quotas and report | TRIGGERED: app baseline 428867584 bytes (409 MiB), SHM counted exactly; lower aggregate/per-context host quotas and retain runtime/compositor reserve; Main and GpudCore notified |
-| BigApp RADV dlopen fails → static link | NOT TRIGGERED: shared RADV dlopen and vkCreateInstance passed in app 99; device/AGC execution remains C2 |
+| BigApp RADV dlopen fails → static link | NOT TRIGGERED: shared RADV dlopen/instance passed C1; device creation and GPU execution passed C2b; no loading-driven static fallback required |
 | C2a optional all-flexible RADV BO option-f passes fully → offer native fast path | NOT TESTED; optional all-BO-flexible allocator is not implemented by these probes; ordinary imported-SHM fill is not evidence for option f |
 | SOCK_SEQPACKET unsupported → framed SOCK_STREAM render front end | Socketpair PASSED in both plain and app C1; no availability-driven fallback needed from this result; bound sockets / protocol fd passing still require their own tests |
 
-Neither GpudCore nor VenusIcd should infer a positive memory, loading, coherence,
-or payload-GPU gate from a successful cross-build.
+GpudCore and VenusIcd received the loading, memory-type, quota and coherence
+results. These are **C-series probe results**, not an end-to-end Venus/vkr/vtest
+or presentation pass. No C3/C4 runs, optional all-flexible-BO option-f run,
+deliberate GPU-hang recovery test, or LKL-tree changes were performed here.
