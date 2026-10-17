@@ -1100,3 +1100,65 @@ The required host preflight then available before the next Venus run passed:
 Evidence: `central-fix-host-preflight.log` and
 `build/gpud/logs/sanitize-full-hd-trace/`. Compositor commit counters now also
 include xdg app ID and title; host vkcube is explicitly `title=vkcube`.
+
+### Fresh compositor startup regression — before a Vulkan client connects
+
+Both PS5 ICDs and the corrected 60s compositor rebuilt successfully
+(`artifact://1133`,124.67s); the new compiler fingerprints forced the intended
+clean Mesa migration. Preserved compositor:
+`central-fixed-compositor-60.elf`, SHA256
+`fda71f5eabea9525c33e7d447b365275e190a1d5faf80fa546473839d9788af0`.
+Venus ICD SHA256:
+`189c9dbd7c5bfa6ab74db67d37155319f8f18227e9b41739c8dcfd1da9a89824`.
+
+Foreground135 then faulted approximately465ms after Wayland readiness and
+demo autostart, before cube137 was even launched. Cube137 never connected
+or created a GPU context and was receipt-killed at8s. This is **not** a
+post-fix C4 present attempt: zero frames and no PNG. The diagnostic launcher
+reported child disappearance/result0, which therefore does **not** prove
+normal compositor exit; the body log explicitly contains FATAL SIGSEGV.
+Evidence: `g4-fixed-*.log`.
+
+The safety handler was extended with bounded signal-context RIP/RSP/RBP and
+RAX/RDI/RSI formatting. Subsequent 15s diagnostic143 recorded libc base
+`0x8011d0000` and RIP `0x8011d6505`, hence
+**libSceLibcInternal+0x6505**, fault address `0x840000000`.
+RDI=`0x8806b5a60`, RSI=RAX=0. Evidence:
+`startup-fault-{rip,map}-*.log`. Ordinary payload147's privileged, page-sized
+code read proved the instruction is `49 8b 06` (`mov (%r14),%rax`) following
+a global-pointer load in the native function prologue, not a demonstrated
+memset buffer copy. Native malloc/calloc/free exports are+0x5f30/0x5f50/0x5f40;
+memset+0x15170 and strlen+0x4480. Evidence:
+`startup-libc-copy-*.log`. The earlier direct userspace code-read probe closed
+its log connection before capture; the protected-copy probe supersedes it.
+
+All before/after process checks remained responsive. No foreground app,
+demo or Vulkan client remained after cleanup; idle keepalive138 was the only
+owned payload. The actual caller of the faulting libc prologue remains
+unproven. SDK source and the actual compositor ELF ruled out the proposed
+resident-kernel fini execution path: sprx_fini/ref_fini are no-ops, and the
+public loader wrappers bind to their initialized payload CRT implementations.
+
+### Coordinator-authorized module lifetime fix — solo startup gate passed
+
+The coordinator directed the native poll cache to retain its explicit
+kernel_sys loader handle for the lifetime of the cached function pointer,
+without waiting for proof of the exact libc caller. The resolver no longer
+calls dlclose. Compatibility archive SHA256 is now
+`8f883c9628b356c3251e8502f797b49d29d6d6bf8d9528ecebdc9aa360168d57`.
+Ps5Deps reran its targeted host semantics, archive bootstrap and minimal
+Bsymbolic shared link successfully.
+
+Rebuilt foreground149 then passed the required complete60s solo run
+(no Vulkan payload; existing native demo autostart retained): approximately
+3480 named demo commits, no FATAL, bounded clean teardown and responsive
+after-run process check. Completed-scanout `retain-module-solo.png` was
+pulled on9531 and inspected: readable interactive demo text, checkerboard,
+1920x1080 frame and pointer, no observed corruption. Evidence:
+`retain-module-solo-*.log`; accepted bounded artifact
+`retained-module-compositor-60.elf` SHA256
+`4f95dcfc81ddcb493f99e7b09ef1b53b68a9e670cafb24b18922fba378a8bcef`.
+This proves that lifetime change removed the reproduced startup regression.
+It does not by itself prove which native libc call faulted, G4 rendering or
+the final refreshed installation. Venus/RADV/lavapipe are being relinked
+against this final archive before further Vulkan console use.

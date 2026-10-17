@@ -181,6 +181,10 @@ The final rebuild with the central `ppoll` correction completed successfully;
 its audit retains all four public-loader relocations and all three
 `vk_instance_init` calls to `mesa_mtx_init`. Disassembly also confirms Wayland's
 timeout helper calls the central `__wrap_ppoll`, not the SDK's incompatible stub.
+The latest central-shim rebuild retains the cached native-poll module for the
+process lifetime. Post-link inspection confirms its resolver calls `dlopen` and
+`dlsym` without `dlclose`; loader bindings, C11 targets and Wayland's wrapper
+callsite remain intact. The symbolized evidence log records the final hashes.
 
 No 600-present or screenshot acceptance is claimed. Every additional console
 run requires explicit authorization and coordination with the console owner.

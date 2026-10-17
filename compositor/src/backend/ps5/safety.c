@@ -7,6 +7,8 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <time.h>
+#include <ucontext.h>
+#include <ps5/kernel.h>
 #include <unistd.h>
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2 && ATOMIC_LONG_LOCK_FREE == 2,
  "watchdog and fatal handlers require lock-free atomics");
@@ -25,8 +27,7 @@ static void close_video(void) {
  if (handle >= 0) sceVideoOutClose(handle);
 }
 static void fatal_signal(int sig, siginfo_t *info, void *context) {
- (void)context;
- char text[128]; size_t n = 0;
+ char text[384]; size_t n = 0;
  const char prefix[] = "ps5wl FATAL signal=0x";
  for (size_t i = 0; i < sizeof(prefix) - 1; ++i) text[n++] = prefix[i];
  static const char digits[] = "0123456789abcdef";
@@ -35,6 +36,20 @@ static void fatal_signal(int sig, siginfo_t *info, void *context) {
  for (size_t i = 0; i < sizeof(middle) - 1; ++i) text[n++] = middle[i];
  uintptr_t address = (uintptr_t)info->si_addr;
  for (int shift = 60; shift >= 0; shift -= 4) text[n++] = digits[(address >> shift) & 15];
+ /* Firmware-measured prefix, also used by the Vulkan fault collector. */
+ const mcontext_t *mc = &((const struct {
+  unsigned char native_prefix[64]; mcontext_t machine;
+ } *)context)->machine;
+ if (mc->mc_len >= 256 && mc->mc_len <= 2048) {
+  const char *labels[] = { " rip=0x", " rsp=0x", " rbp=0x", " rax=0x", " rdi=0x", " rsi=0x" };
+  const uintptr_t values[] = { mc->mc_rip, mc->mc_rsp, mc->mc_rbp,
+   mc->mc_rax, mc->mc_rdi, mc->mc_rsi };
+  for (size_t r = 0; r < sizeof(values) / sizeof(values[0]); ++r) {
+   for (const char *label = labels[r]; *label; ++label) text[n++] = *label;
+   for (int shift = 60; shift >= 0; shift -= 4)
+    text[n++] = digits[(values[r] >> shift) & 15];
+  }
+ }
  text[n++] = '\n'; ps5log_emergency_write(text, n);
  close_video(); ps5_process_exit(128 + sig);
 }
@@ -64,6 +79,13 @@ static int tick(void *data) {
 }
 int ps5_safety_init(struct wl_event_loop *loop) {
  if (ps5_safety_thread_stack(0)) return -1;
+ extern const unsigned char __image_start[];
+ ps5log("native image base=%p fatal_handler=%p", __image_start, fatal_signal);
+ intptr_t kernel_base = kernel_dynlib_mapbase_addr(-1, 1);
+ if (!kernel_base) kernel_base = kernel_dynlib_mapbase_addr(-1, 0x2001);
+ ps5log("native module bases kernel=%p libc=%p",
+  (void *)kernel_base,
+  (void *)kernel_dynlib_mapbase_addr(-1, 2));
  struct sigaction action = { .sa_sigaction = fatal_signal, .sa_flags = SA_SIGINFO | SA_ONSTACK };
  sigemptyset(&action.sa_mask);
  const int signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE, SIGSYS };

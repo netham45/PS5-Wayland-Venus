@@ -60,8 +60,10 @@ one-time loader lookup it does not allocate, copy fd arrays or start threads.
 Native `poll` is resolved using an explicit
 `/system/common/lib/libkernel_sys.sprx` loader handle:
 SDK `RTLD_NEXT` is unsupported, while `RTLD_DEFAULT` can select epoll-shim's
-interposed `poll` and recurse. The temporary handle is closed after lookup;
-the SDK releases lookup metadata without unloading this resident kernel module.
+interposed `poll` and recurse. The explicit module handle is retained for the
+process lifetime alongside the cached function pointer, rather than destroying
+its lookup owner while callers can still use the pointer. This is one retained
+SDK loader object per linked compatibility instance, not a per-call allocation.
 No private payload-CRT kernel helper imports are required by ICD DSOs.
 
 For a non-null signal mask, native `pselect` performs the actual atomic
@@ -232,11 +234,21 @@ HUP/ERR-only subscriptions, duplicate and maximum-sized vectors, caller and
 notification fds above 1024, pending and in-flight thread-directed signals with
 `SA_RESTART`, unrelated-thread signals, mask restoration and cancellation cleanup.
 The target archive compiled successfully, and a small PS5 `-shared -Bsymbolic
---no-undefined` link succeeded with public `dlopen`/`dlsym`/`dlclose` and `pselect`
+--no-undefined` link succeeded with public loader and native `pselect`
 GOT relocations. `llvm-readelf` emitted the SDK binary's PT_DYNAMIC-size warnings;
 the relocation inspection still exited zero. These are host-semantic/link
 results and primitive console evidence, **not** a completed repaired ICD/WSI
 console acceptance run.
+
+An ordinary-payload Bsymbolic DSO test subsequently passed zero/finite/ready,
+duplicates, POLLNVAL, HUP-only and masked signal/readiness/timeout cases while
+an actual root poll interposer would return ELOOP
+(`build/ps5/evidence/gpu/ppoll-dso-client.log`, console-owner report).
+Foreground compositor validation then exposed a libc fault before any GPU
+client; its cause is not established by these tests. The cached resolver now
+retains the explicit module handle for the function pointer's lifetime.
+Foreground validation is a separate acceptance gate; neither the ordinary
+payload pass nor the lifetime correction establishes that gate by itself.
 
 ### Console-stop evidence
 

@@ -17,18 +17,20 @@
 /* Do not call the interposable poll symbol: epoll-shim's poll calls ppoll. */
 static pthread_once_t poll_once = PTHREAD_ONCE_INIT;
 static int (*native_poll)(struct pollfd *, nfds_t, int);
+#ifdef __PROSPERO__
+static void *native_poll_module;
+#endif
 
 static void resolve_poll(void)
 {
 #ifdef __PROSPERO__
     /* RTLD_NEXT is unsupported in the SDK; RTLD_DEFAULT can hit interposers.
      * An explicit resident-kernel handle works in both payloads and ICD DSOs. */
-    void *module = dlopen("/system/common/lib/libkernel_sys.sprx", RTLD_NOW | RTLD_LOCAL);
-    if (module) {
-        native_poll = dlsym(module, "poll");
-        /* SDK sprx_close only frees metadata for this already-resident module. */
-        dlclose(module);
-    }
+    /* The lookup owner has the same process lifetime as the cached function.
+     * Do not close it while the function pointer remains callable. */
+    native_poll_module = dlopen("/system/common/lib/libkernel_sys.sprx", RTLD_NOW | RTLD_LOCAL);
+    if (native_poll_module)
+        native_poll = dlsym(native_poll_module, "poll");
 #else
     native_poll = dlsym(RTLD_NEXT, "poll");
 #endif
