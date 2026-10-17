@@ -42,6 +42,12 @@ Every claim about the console is either cited evidence or marked
   BigApp diagnostic (no VideoOut) crashed the console (2026-10-16): child never
   logged, console found powered off, hard power cycle needed (the usual crash
   symptom). Last lines: `build/ps5/evidence/bigapp-fork-budget.log`.
+- **Interactive app confirmed (2026-10-16):** the "PS5 Wayland" home-screen
+  icon launches the compositor as the foreground app with the separate
+  `ps5wl-demo` client autostarted; the user confirmed on the TV that it renders,
+  that keyboard typing/Backspace, mouse dragging and DualSense pointer/drawing
+  work, and that Ctrl+Alt+Backspace / Options+Create return to the PS5 UI.
+  Evidence: `build/ps5/evidence/final-*.log`, `final-demo.png`.
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.
