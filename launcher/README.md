@@ -34,9 +34,19 @@ installer 85 remained. The installation is left **not running**, ready for
 the user's actual icon/TV/input check. Automated HTTP triggering does not
 prove that a human selected the icon or saw the HDMI output.
 
-That console acceptance predates the native RADV asset packaging below. The
-additional installer asset is an offline source/bundle change, not evidence
-that resident85 or the currently installed library was updated.
+The refreshed gpud/native-RADV bundle is now installed and accepted on the same
+firmware. Resident installer97 registered the icon and installed the no-timeout,
+PowerTick/getter-only compositor plus demo and native RADV. Its normal loopback
+icon handler launched foreground99 and automatic demo100. Separate untraced
+Venus client101 reached600 presents and600 named1920x1080 compositor commits;
+after its receipt-owned kill, relaunched client102 reached120. Actual scanout
+`build/ps5/evidence/gpu/final-gpu-{demo,venus,venus-relaunch,demo-past-sixty}.png`
+was inspected, including the demo still rendering beyond66s. Shipping close103
+returned0 throughout its title-checked sequence and left no app/demo/client/
+helper. Only installer97 and keepalive86 remain among owned payloads.
+`gpu-server/probes/RESULTS.md` records exact final hashes and all run evidence.
+The refreshed app is left **not running**, ready for the final human icon/TV
+check; the older85/87/88 preflight above is historical.
 
 ## Build and install
 

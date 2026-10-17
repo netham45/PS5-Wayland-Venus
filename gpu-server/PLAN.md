@@ -301,6 +301,14 @@ The guest side is fully stock:
 | G6 | Zero-copy presentation (`ps5wl_gpu_buffer_v1`, and the D2 SHM-fd bridge) | ≥ 30 % compositor CPU reduction at 1080p60 versus G4 |
 | L track | Lavapipe PS5 payload (LLVM cross build, JIT) | vkcube on lavapipe presents 600 frames on the console |
 
+Current hardware acceptance: G3, G4/C4 and L-track L5 passed on PS5; see
+[`probes/RESULTS.md`](probes/RESULTS.md), final recovered-console section.
+The refreshed no-timeout, PowerTick/getter-only app is installed, passed its
+normal icon-handler/demo/Venus/shipping-close preflight, and is left not
+running. G5/G6 are separate future milestones, not required for this native
+interactive Vulkan-app handoff and not claimed by that evidence.
+
+
 ## 6. Console experiment ladder (strict order; stop at any unexpected result)
 
 | # | Context | What | Hang risk | Containment |

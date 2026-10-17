@@ -199,7 +199,12 @@ No raw-syscall permission bypass or private-hook export was added. This
 supersedes the prior driver hash; console acceptance of the rebuilt driver is
 recorded separately in the GPU probe results.
 
-No 600-present or screenshot acceptance is claimed. Every additional console
-run requires explicit authorization and coordination with the console owner.
-For a full acceptance run, allow enough compositor lifetime for 600 CPU-rendered
-1080p frames rather than the short Venus experiment timeout.
+The final PS5 driver SHA256
+`f613858b6ff6d82f09d57249f13e6f01c009925e0052596438ca6438c10e5097`
+passed actual ICD runtime-binding audit and console acceptance: separate
+client95 rendered600 frames, compositor93 committed600 named1920x1080 cube
+buffers, and the inspected scanout PNG shows the textured cube. Both client
+cleanup and the compositor's bounded shutdown completed; gpud stopped0.
+Evidence is `build/ps5/evidence/gpu/l5-final-public-runtime-*` and the final
+section of `gpu-server/probes/RESULTS.md`. Additional console runs still require
+coordination with the console owner.

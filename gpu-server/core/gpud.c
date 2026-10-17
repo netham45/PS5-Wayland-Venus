@@ -285,8 +285,11 @@ int ps5wl_gpud_stop(unsigned drain_ms)
     atomic_store(&stopping, true);
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
+    logger(VIRGL_LOG_LEVEL_INFO, "gpud stop: vtest shutdown begin", NULL);
     gpud_vtest_shutdown();
+    logger(VIRGL_LOG_LEVEL_INFO, "gpud stop: render shutdown begin", NULL);
     gpud_render_shutdown();
+    logger(VIRGL_LOG_LEVEL_INFO, "gpud stop: client drain begin", NULL);
     int result = gpud_vtest_drain(drain_ms);
     clock_gettime(CLOCK_MONOTONIC, &end);
     int64_t elapsed = (end.tv_sec - start.tv_sec) * INT64_C(1000) +
@@ -298,7 +301,9 @@ int ps5wl_gpud_stop(unsigned drain_ms)
         return -EBUSY;
     }
     if (gpud_is_wedged()) return -EBUSY;
+    logger(VIRGL_LOG_LEVEL_INFO, "gpud stop: renderer fini begin", NULL);
     vkr_renderer_fini();
+    logger(VIRGL_LOG_LEVEL_INFO, "gpud stop: renderer fini end", NULL);
     if (gpud_is_wedged()) return -EBUSY;
     started = false;
     char message[96];

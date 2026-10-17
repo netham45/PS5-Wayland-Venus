@@ -157,7 +157,11 @@ build/, .sdk/                      generated, git-ignored
    compositor over AF_UNIX.
 6. **M5 input** — pad→pointer/keyboard, sceKeyboard, sceMouse, sceImeDialog→
    text-input-v3.
-7. **M6 native vkcube** — RADV payload Mesa + shm WSI path [UNVERIFIED].
+7. **M6 native vkcube** — accepted on PS5 via separate Venus payload →
+   compositor's in-process RADV GPU server → shm WSI. Both600 presents and600
+   named1920x1080 compositor commits, inspected scanout, and client
+   kill/relaunch passed against the final installed app. Separate lavapipe
+   also passed600; evidence: `gpu-server/probes/RESULTS.md`.
 8. **M7 remote/LKL** — waypipe from Linux PC; LKL D1 (waypipe in guest) and
    D2 (supervisor bridge aliasing `/lkl_phys_mem` pages).
 9. **M8** — GPU composition on RADV; lifecycle (rest mode, game launch);

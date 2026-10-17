@@ -2,13 +2,15 @@
 
 Status: **C1, all three C2a sizes, C2b, and corrected C3 completed.**
 Both power-disabled A and PowerTick/getter-only B passed readback and clean
-shutdown. **C4 is not yet accepted:** later guarded runs remain responsive,
-and localized its first-present stall to the SDK's invalid zero-timeout ppoll
-result before the CPU-image copy. L5's extended fault capture identified an
-LLVM public-loader binding defect during device creation; its source fix is
-built but not yet console-accepted. The final refreshed installation is not
-accepted. Shared-SHM GPU import, GPU writes/readback, cross-process coherence,
-and in-app shared RADV execution passed.
+shutdown. **C4/G4 and L5 are accepted:** separate Venus and lavapipe clients each
+rendered600 frames with600 named1920x1080 compositor commits and inspected
+scanout PNGs. Normal Venus kill/relaunch passed against the final installed
+app. The recovered-console bounded stop-trace run drained every gpud phase and
+cleanly exited; the earlier timer teardown hang remains a historical,
+unexplained failure, not a claimed source cure. The refreshed no-timeout,
+PowerTick/getter-only app is installed and passed icon-handler launch,
+automatic demo, normal Venus600, survival beyond60s and shipping title-close.
+It is left **not running**; resident installer97 and keepalive86 remain.
 **App flexible headroom at the measured baseline was only 428,867,584
 bytes (409 MiB); SHM is counted against it.** The 1 GiB map failed ENOMEM.
 Main treated this as the expected §6 quota gate and authorized the remaining
@@ -1193,7 +1195,8 @@ links also succeeded.
 
 ### Post-stale-recovery console gates — two new source failures
 
-`g4-stale-safe-*.log`: foreground159 started gpud with `result=0`; client161
+The first stale-safe run (foreground159/client161; historical agent transcript,
+before the later passing run reused the `g4-stale-safe-*` artifact names)
 selected the Venus RADV device, then asserted in the initial surface-format
 query before any presents. It exited before the8s cleanup; no kill was sent to
 another PID. The compositor survived all60s, drained gpud with result0 and
@@ -1224,3 +1227,183 @@ supersedes the requested old hash; its acceptance remains a separate gate.
 Client166 exited after its full extended fault capture; the compositor again
 completed60s and clean teardown. All before/after console checks remained
 responsive; keepalive138 was left running.
+
+### Actual ICD symbol visibility — WSI root cause and rendering acceptance
+
+`g4-initialization-trace-*.log` (foreground174/client176) showed the Venus WSI
+display initialization finding neither wl_shm nor dmabuf, with no Wayland
+display error and errno78/ENOSYS. Actual ICD disassembly proved `resolve_poll`
+called SDK-local `dlopen`/`dlsym` directly despite the canonical dynamic-list.
+Mesa's PS5 version script had `local: *`; the dynamic-list cannot override
+that localization. `deps/mesa/patches/0005-ps5-public-runtime-bindings.patch`
+therefore makes the seven canonical public SDK runtime functions global in
+the actual ICD version script; no private hooks are exported. The optional
+WSI trace is `deps/mesa/venus-patches/0012-wsi-initialization-trace.patch`.
+
+`deps/mesa/tests/public-runtime-bindings.py` audits actual final relocations
+and disassembly rather than a different link configuration. The rebuilt Venus
+and RADV ICD audits both passed in bg358 (exit0,112.60s, artifact://1212).
+The sanitized host full-HD traced cube suite passed after WSI tracing too
+(bg353,139.23s, artifact://1196).
+
+The later `g4-stale-safe-*` artifacts are the **passing rendering run**:
+
+- Foreground179, automatic native demo180; separate Venus clients181 then182.
+- First client log: `[6824035 ms] ... vkcube presented frame=600`.
+- Compositor log: `[6824059 ms] ... client surface committed 1920x1080
+  count=600 app_id=(unset) title=vkcube`.
+- `g4-stale-safe-cube.png` and `g4-stale-safe-relaunch.png` were both opened
+  and inspected: readable textured LunarG cube on gray background,1920x1080,
+  at different orientations. These are compositor9531 completed-scanout PNGs,
+  not GPU staging-buffer captures.
+- Client181 was receipt-killed after600; compositor179 survived. Client182
+  relaunched and reached120 presents before its receipt-owned kill.
+- Context1 teardown logged DeviceWaitIdle0 and released11 resources,
+  51,494,912 host-charge bytes; context2 logged DeviceWaitIdle0 and released10
+  resources,43,106,304 host-charge bytes. Both reached contexts0.
+- Keepalive138 was not signaled.
+
+SHA256 at that run:
+
+```text
+849f436d47312e016e29fd6b803889e544c4cd6b8888eb228019018c2747832d  build/ps5/evidence/gpu/stale-safe-compositor-60.elf
+98ecd9eb4f565565b423667bf5b2d2e5d6323403337a76426a9359ba8ca9680d  build/ps5/venus/lib/libvulkan-venus.so.1
+abc955b8cb5044961e2a41469f28f830785a4d31d6bae1807be8fb73e2108111  build/ps5/vkcube-venus/ps5wl-vkcube-venus.elf
+```
+
+### Rendering passed; timer teardown blocked — no final deployment claim
+
+After both cube contexts were destroyed, native-demo rendering continued
+until `[6867380 ms] bounded hardware validation timeout; releasing VideoOut`.
+The watchdog then reported a stalled heartbeat; no `gpud stop result` or clean
+shutdown marker appeared. Diagnostic driver178 reported child179 still present
+after75s; the bounded harness exited1. `g4-stale-safe-after.log` still listed
+foreground179 and demo180. This is not a clean bounded shutdown acceptance.
+
+The shipping `launcher/ps5wl-close.elf` was uploaded once as receipt-owned183.
+Its9585 log listener never opened; `g4-versioned-close-after.log` still lists
+183,179,180. Payload Manager and process inspection remained responsive.
+`g4-versioned-manager.log` preserves its upload/loader receipt. No standalone
+BigApp SIGKILL, budget change, or app-process fork was used. Console cleanup
+and further app runs are held pending a safe title-close path; the refreshed
+installer has not been deployed. Stop-phase localization logs were added at
+the daemon source boundaries for the next permitted diagnostic run.
+
+### Offline completion while console title-close is blocked
+
+The complete LLVM/X86 release prerequisite, PS5 lavapipe ICD and fault-traced
+separate lavapipe cube rebuilt successfully (bg355,647.18s,
+artifact://1206). Its actual final-ICD runtime-binding audit passed:
+`env/run python3 deps/mesa/tests/public-runtime-bindings.py lavapipe`.
+All three actual drivers now pass this audit. Lavapipe600 presents and its
+scanout PNG remain unrun because the known foreground title is still blocked.
+
+The stop-phase diagnostic changes passed the complete sanitized full-HD traced
+host600/concurrency/killed-SHM/stale-listener suite; PS5 gpud, preserved bounded
+compositor, normal no-timeout power-enabled compositor, and installer all
+rebuilt successfully (bg359,119.05s, artifact://1223). Existing `_GNU_SOURCE`
+redefinition, compositor unused-parameter, and launcher sign-compare warnings
+remain in the build output. No deployed bytes are inferred from these offline
+builds.
+
+Current staged artifacts (SHA256):
+
+```text
+f613858b6ff6d82f09d57249f13e6f01c009925e0052596438ca6438c10e5097  build/mesa/ps5-lavapipe/sysroot/lib/libvulkan_lvp.so
+ff9d328f1acc334729f6229268ad110f25fcbd3a4be8da38c4702bc81479dea5  build/ps5/vkcube-lavapipe/ps5wl-vkcube-lavapipe.elf
+57831d85e8c6c41af9f1d80334cb5bfdf4316987923b572670138d721e130782  build/ps5/evidence/gpu/stop-trace-compositor-60.elf
+3f68176f44cb854bae4fb83a18e600bf243c418168d96cafe93d885e3e408eaf  build/ps5/compositor/ps5wl
+34a58ac59784951e55d4cbbd042e0b47a01482e3930d9420b8afde195489c57d  build/ps5/clients/ps5wl-demo.elf
+421c931feb68733def2ccf38930c88cbeafa8367143a4300fe25fbf2943bbca8  build/ps5/sysroot/lib/libvulkan.so.1
+51496562456b6bfa734e3ac9ec95b77601d1a1e6584b7748727e8098e943cef6  launcher/ps5wl-install.elf
+5ec69c3e3fa95df96ccfc886384eaf69b104eb811b57033846147ffd384ad4f9  launcher/ps5wl-close.elf
+d318ff16abbe933f7bbb60aac6066d439ece8aa2dc697ac8e3c4535f86f06f89  build/ps5/evidence/gpu/g4-stale-safe-cube.png
+f841023426fc01fa708f4dcd8ea49cb2f799caf796ef5592b0852616bc35a482  build/ps5/evidence/gpu/g4-stale-safe-relaunch.png
+```
+
+`local://need-user.md` now explicitly holds all icon/payload actions, names the
+safe physical known-title close prerequisite, and separates the later visual
+check instructions from the final installation that is not yet deployed.
+Checkpoint `hub jobs`/`hub ps` are unavailable (exit127); both owned builds have
+settled. No `.img` files were found under the scoped PS5 evidence/probe paths,
+so no probe disk image was deleted.
+
+### Recovered console — bounded stop, L5, and final installed app accepted
+
+Main relayed the user's power-cycle recovery and explicitly resumed the run
+ladder. `recovered-stop-trace-before.log` confirmed old179/180/183 and the old
+keepalive were gone. The plain keepalive was relaunched first as receipt-owned86
+(`recovered-keepalive-*.log`, port9539). It was not killed afterward.
+
+The exact stop-trace compositor SHA57831d85… ran once with Venus:
+`recovered-stop-trace-*`, driver87/compositor88/demo89/client90. Client90
+reached120 presents, was screenshot-captured and receipt-killed early. Context1
+released10 resources and43,106,304 host-charge bytes. At222204ms the60s timer
+logged all five stop-phase boundaries, `gpud stop result=0`, then
+`compositor clean shutdown` at222306ms. Driver87 confirmed child88 disappeared;
+harness exit0, no owned app/client/demo afterward. The earlier hang did **not**
+reproduce; no speculative workaround or claimed root-cause cure was added.
+
+L5 used the final driver f613858b… and cube ff9d328f…:
+`l5-final-public-runtime-*`, driver92/compositor93/demo94/client95.
+At267037ms the client logged `vkcube presented frame=600` and compositor logged
+`client surface committed 1920x1080 count=600 app_id=(unset) title=vkcube`.
+`l5-final-public-runtime-cube.png` was opened and inspected: correctly textured
+LunarG cube,1920x1080. Receipt-owned client cleanup preceded timer expiry.
+At305376ms all gpud stop phases completed, result0, clean shutdown305472ms;
+driver confirmed child93 disappeared and harness exited0. This is actual PS5
+LLVM JIT/lavapipe rendering acceptance, not just a link or host-only test.
+
+The normal Venus client was rebuilt **without** `--sync-trace` (bg362,
+exit0,3.04s, artifact://1232). Installer97 then deployed the existing normal0s
+power-enabled compositor, native RADV and automatic demo:
+
+```text
+[338769 ms] installed demo bytes=1179336
+[338769 ms] installed Vulkan driver bytes=21202376 path=/data/ps5wl/libvulkan.so.1
+[338845 ms] register title=PSWL00001 method=AppInstallTitleDir rc=0x0 bytes=11220800
+[338845 ms] install result=0
+[338845 ms] ready http=127.0.0.1:9581 logs=9580
+```
+
+`final-gpu-*` records the actual final installation preflight:
+
+- Normal loopback icon handler returned HTTP200 through trigger98.
+- Installed foreground99 started gpud with result0; installed demo100
+  automatically connected. `final-gpu-demo.png` was opened and inspected:
+  readable interactive-demo heading, checkerboard, pointer/text instructions.
+- Normal separate Venus101 logged frame600 at376831ms; the compositor logged
+  named vkcube commit600 at376847ms. `final-gpu-venus.png` was inspected and
+  shows the correct textured cube.
+- Client101 was receipt-killed; compositor survived. Separately launched102
+  reached120 presents, `final-gpu-venus-relaunch.png` was inspected, and102
+  was receipt-killed. Both GPU contexts logged idle0 and full destruction.
+- The installed compositor/demo remained running beyond66s from trigger,
+  with `final-gpu-demo-past-sixty.png` showing demo frame3462 at436490ms.
+  This PNG was inspected; there was no bounded60s shutdown in the normal app.
+- Shipping close103 verified exact titlePSWL00002/app0x4019, SuspendApp0,
+  owned99 SIGKILL0, KillApp0, then running app0xffffffff and completion0.
+  The title-scoped shipping sequence, not standalone BigApp SIGKILL, was used.
+- `final-gpu-processes.log` after helper expiry lists resident installer97
+  and keepalive86, but no compositor, demo, Vulkan client or test/close helper.
+  The refreshed installation is left **not running**.
+
+All screenshots above are actual completed-scanout9531 captures at1920x1080.
+Automated loopback launching does not prove human home-screen icon selection
+or TV visibility; exact final visual-check instructions are in
+`local://need-user.md`. Physical input was previously confirmed by the user.
+The earlier ownership HOLD is released by this final installed-not-running
+handoff; no further automated console run is pending.
+
+Final additional SHA256 (the compositor/RADV/demo/close hashes in the staged
+table above are unchanged):
+
+```text
+b6853ad0cb1b342bf30cd1912237f35537107bbc2396ce8e164848e8c5cc6366  build/ps5/vkcube-venus/ps5wl-vkcube-venus.elf
+31f8e77d8cd3e5352ffd4c12a0d59f3051f9bfb466cedae669bfeb67828c5076  launcher/ps5wl-install.elf
+7abf6f2a395b3c53cc9bab26dc885ec31a3ee35c51f0236429041c66c6bd61cf  build/ps5/evidence/gpu/l5-final-public-runtime-cube.png
+746ca30c90a91e8e1b6872cf917d11957e3210e1a1b0f45847ad02eb13f1d5e6  build/ps5/evidence/gpu/final-gpu-demo.png
+195eed039bbe04b5db55e8fabc059846bc0cf4f69259d66584ef4706e56a5e51  build/ps5/evidence/gpu/final-gpu-venus.png
+1a6acfebda9537afc117e4779ebda6444e60507136eee2e4b2d8e884d8dbb5ab  build/ps5/evidence/gpu/final-gpu-venus-relaunch.png
+ef6a4f44fe36dc04cd2873830736a13d3cb7086c44cd57a81a87c8c7a76b5f1c  build/ps5/evidence/gpu/final-gpu-demo-past-sixty.png
+```

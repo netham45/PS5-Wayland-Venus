@@ -63,6 +63,31 @@ Only the PS5 lavapipe cube defaults to 600 frames, using
 Explicit `--c` still overrides that default. Other variants keep their
 interactive default; host acceptance keeps its explicit 120-frame limit.
 
+### Accepted PS5 interactive path
+
+The final installed app passed separate-binary Venus600 presents plus600
+named1920x1080 compositor commits, inspected scanout, receipt kill/relaunch120,
+and compositor survival. The independent lavapipe payload also passed600
+presents/commits and an inspected textured-cube scanout. Exact logs and final
+artifact hashes are in `gpu-server/probes/RESULTS.md`, recovered-console section.
+The Venus client uses the foreground compositor's in-process RADV server;
+the historical direct-RADV payload allocation failure below is not the accepted
+interactive path.
+
+Select the installed **PS5 Wayland** icon, wait for its automatic demo, then:
+
+```sh
+tools/ps5ctl ps
+tools/ps5ctl run build/ps5/vkcube-venus/ps5wl-vkcube-venus.elf
+tools/ps5ctl ps
+tools/ps5ctl logs --port 9590 --retry 10
+```
+
+This final client is built without `--sync-trace` and remains interactive until
+Escape closes its focused window. Ctrl+C stops only the host log observer.
+Whole-app exit is Ctrl+Alt+Backspace or DualSense Options+Create, not Escape.
+
+
 
 ## Console sequence
 
@@ -132,7 +157,8 @@ Observed console GPU acceptance (log port 9591, payload pids 137 and 143):
 all 16,384 image-clear readback words matched `0x1a2b3c4d`, with
 `mismatches=0` and `RESULT PASS` in both runs. These payloads created no
 surface and did not link or open VideoOut. The second run also exercised
-atomic driver-file replacement. Console Wayland cube acceptance remains unproven.
+atomic driver-file replacement. Direct-RADV payload Wayland cube acceptance
+remains unproven; the accepted Venus/in-process-RADV path is documented above.
 
 The descriptor-wrapper cutover was clean-built (825 targets) with both C and
 C++ compiler paths explicitly selecting `cross/bin/prospero-clang{,++}`.
@@ -146,7 +172,7 @@ The embedded 21,200,784-byte driver was extracted successfully under
 262,144 bytes; its truncated file was removed. Use `/data`, not the small
 temporary filesystem, for the shared driver.
 
-The full-HD Wayland run remains blocked by a real native allocation failure.
+The direct-RADV payload full-HD Wayland run remains blocked by a real native allocation failure.
 At 4145472 ms, cube pid 191 reported `uid=1 euid=0 gid=1 egid=1` and a
 12,884,901,888-byte pool, but
 `sceKernelAvailableDirectMemorySize(0, pool, 0x200000, ...)` returned
