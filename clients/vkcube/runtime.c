@@ -7,6 +7,23 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "ps5log.h"
+#if defined(PS5WL_PS5) && defined(PS5WL_VENUS) && defined(PS5WL_SYNC_TRACE)
+#include <dlfcn.h>
+static void venus_log(const char *message) {
+    ps5log("Venus: %s", message);
+}
+
+int ps5wl_vulkan_trace_bind(void *library) {
+    void (*set_handler)(void (*)(const char *)) =
+        (void (*)(void (*)(const char *)))dlsym(library, "ps5wl_venus_set_log_handler");
+    if (!set_handler) {
+        ps5log("FAIL Venus trace log handler unavailable");
+        return -1;
+    }
+    set_handler(venus_log);
+    return 0;
+}
+#endif
 
 #ifndef PS5WL_DRIVER_NAME
 #define PS5WL_DRIVER_NAME "radv"
@@ -31,7 +48,7 @@ static void log_direct_memory(const char *stage) {
         (long long)pool, (unsigned)rc, (long long)start, available);
 }
 
-static void dump_driver_log(void) {
+void ps5wl_vulkan_dump_log(void) {
     FILE *log = fopen(driver_log, "r");
     if (!log) {
         ps5log("Mesa log unavailable path=%s errno=%d %s", driver_log, errno, strerror(errno));
@@ -61,7 +78,7 @@ __attribute__((noreturn)) void __wrap___assert(const char *function, const char 
                                              int line, const char *expression) {
     ps5log("ASSERT %s:%d %s: %s", file, line, function, expression);
     log_direct_memory("assert");
-    dump_driver_log();
+    ps5wl_vulkan_dump_log();
     ps5log_flush_wait(5000);
     abort();
 }
@@ -83,6 +100,9 @@ int ps5wl_vulkan_install(void) {
 #ifdef PS5WL_VENUS
     if (!getenv("VTEST_SOCKET_NAME"))
         setenv("VTEST_SOCKET_NAME", "/system_tmp/ps5wl-gpu-0", 0);
+#endif
+#ifdef PS5WL_SYNC_TRACE
+    if (setenv("VN_DEBUG", "wsi", 1)) return -1;
 #endif
 #ifdef PS5WL_PS5
     signal(SIGABRT, fatal_signal);

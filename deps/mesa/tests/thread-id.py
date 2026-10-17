@@ -28,9 +28,11 @@ if a.target == 'ps5':
     cross = configparser.ConfigParser()
     cross.read(ROOT/'build/ps5/cross.ini')
     cc = ast.literal_eval(cross['binaries']['c'])
-    flags += ['-DPS5WL_PS5=1', '-I'+str(ROOT/'common/ps5log')]
+    flags += ['-DPS5WL_PS5=1', '-I'+str(ROOT/'common/ps5log'),
+              '-I'+str(ROOT/'compositor/src/backend/ps5')]
     flags += ast.literal_eval(cross['built-in options']['c_args'])
-    extra = [str(ROOT/'common/ps5log/ps5log.c')]
+    extra = [str(ROOT/'common/ps5log/ps5log.c'),
+             str(ROOT/'compositor/src/backend/ps5/power.c'), '-lSceSystemService']
     extra += ast.literal_eval(cross['built-in options']['c_link_args'])
     binary = out/'ps5wl-venus-thread-id.elf'
 else:

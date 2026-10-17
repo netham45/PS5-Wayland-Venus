@@ -1,0 +1,69 @@
+From: ps5wl contributors
+Subject: [PATCH] vkr: trace queue-ring synchronization boundaries
+
+--- a/src/venus/vkr_queue.c
++++ b/src/venus/vkr_queue.c
+@@ -72,6 +72,8 @@
+ vkr_queue_sync_retire(struct vkr_queue *queue, struct vkr_queue_sync *sync)
+ {
+    TRACE_FUNC();
++   vkr_log("sync-trace retire ctx=%u ring=%u fence=%" PRIu64,
++           queue->context->ctx_id, sync->ring_idx, sync->fence_id);
+    queue->context->retire_fence(queue->context->ctx_id, sync->ring_idx, sync->fence_id);
+    vkr_device_free_queue_sync(queue->device, sync);
+ }
+@@ -91,9 +93,14 @@
+    if (!sync)
+       return false;
+ 
++   vkr_log("sync-trace submit-begin ctx=%u ring=%u fence=%" PRIu64
++           " queue=%p", queue->context->ctx_id, ring_idx, fence_id,
++           (void *)queue->base.handle.queue);
+    mtx_lock(&queue->vk_mutex);
+    VkResult result = vk->QueueSubmit(queue->base.handle.queue, 0, NULL, sync->fence);
+    mtx_unlock(&queue->vk_mutex);
++   vkr_log("sync-trace submit-end ctx=%u ring=%u fence=%" PRIu64
++           " result=%d", queue->context->ctx_id, ring_idx, fence_id, result);
+ 
+    if (result == VK_ERROR_DEVICE_LOST) {
+       sync->device_lost = true;
+@@ -178,9 +185,13 @@
+       if (sync->device_lost) {
+          result = VK_ERROR_DEVICE_LOST;
+       } else {
++         vkr_log("sync-trace wait-begin ctx=%u ring=%u fence=%" PRIu64,
++                 ctx->ctx_id, sync->ring_idx, sync->fence_id);
+          result = vk->WaitForFences(dev->base.handle.device, 1, &sync->fence, true,
+                                     ns_per_sec * 3);
+       }
++      vkr_log("sync-trace wait-end ctx=%u ring=%u fence=%" PRIu64
++              " result=%d", ctx->ctx_id, sync->ring_idx, sync->fence_id, result);
+ 
+       mtx_lock(&queue->sync_thread.mutex);
+ 
+@@ -284,6 +295,9 @@
+ 
+    queue->ring_idx = ring_idx;
+    ctx->sync_queues[ring_idx] = queue;
++   vkr_log("sync-trace bind ctx=%u ring=%u family=%u index=%u sync_fd=%u",
++           ctx->ctx_id, ring_idx, queue->family, queue->index,
++           queue->device->physical_device->KHR_external_fence_fd);
+    return true;
+ }
+ 
+@@ -376,10 +390,15 @@
+ 
+    vn_replace_vkQueueSubmit_args_handle(args);
+ 
++   vkr_log("sync-trace vkQueueSubmit-begin ctx=%u ring=%u count=%u fence=%p",
++           queue->context->ctx_id, queue->ring_idx, args->submitCount,
++           (void *)args->fence);
+    mtx_lock(&queue->vk_mutex);
+    args->ret =
+       vk->QueueSubmit(args->queue, args->submitCount, args->pSubmits, args->fence);
+    mtx_unlock(&queue->vk_mutex);
++   vkr_log("sync-trace vkQueueSubmit-end ctx=%u ring=%u result=%d",
++           queue->context->ctx_id, queue->ring_idx, args->ret);
+ }
+ 
+ static void

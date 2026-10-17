@@ -112,3 +112,35 @@ and a default of 600 frames; the readback client is
 `/data/ps5wl/libvulkan-lavapipe.so.1` and logs on port 9590.
 The PS5 compositor's xdg configure maximizes the cube to 1920x1080; the
 500x500 host acceptance is not a PS5 runtime or timing result.
+
+## Console acceptance gate
+
+The first authorized L5 attempt failed at `vkCreateInstance`, before physical
+device discovery or JIT execution. `build/ps5/evidence/gpu/l5-client.log`
+records client PID 88 extracting its 70,117,688-byte driver, connecting to
+Wayland and reporting `vkCreateInstance failed`. The gatekeeper reported that
+the client exited and the compositor remained responsive. No 600 presents,
+matching compositor commit count or visible-cube screenshot were obtained.
+
+Offline inspection identified a C11 thread ABI collision. The SDK's
+`threads.h` defines `thrd_success=4`; Mesa's emulation defines success as 0,
+and `vk_instance_init` tests `mtx_init(...) != 0`. Disassembly of the first
+payload driver showed its `mtx_init` resolving to the SDK implementation,
+which returns 4 on success. Pacbrew's existing `C11_THREADS_RENAME` protection
+was enabled for RADV, and separately for Venus, but not lavapipe.
+`deps/mesa/lavapipe-patches/0002-ps5-c11-symbols.patch` extends that existing
+protection to the FreeBSD-targeted lavapipe payload; it does not change the
+SDK ABI, suppress the error, or replace the C11 implementation.
+The corrected public PS5 Mesa build and both client links completed (exit 0).
+`objdump --disassemble=vk_instance_init` now shows all three mutex initializers
+calling `mesa_mtx_init`, whose plain-mutex branch returns 0. This proves the
+binary no longer selects the incompatible SDK return convention for those
+calls; it does not prove a corrected console run.
+
+A corrected console run still requires explicit authorization. Use a
+compositor lifetime long enough for 600 CPU-rendered 1080p frames rather than
+the short Venus experiment timeout. The earlier, separate Venus C3
+connectivity-loss evidence remains in `build/ps5/evidence/gpu/`:
+`c3-corrected-client.log` records a port-9591 timeout and
+`c3-corrected-failure-processes.log` records `No route to host`.
+That earlier loss has no diagnosed cause and is not a lavapipe result.

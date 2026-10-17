@@ -52,14 +52,18 @@ static void key(struct wlr_keyboard *keyboard, uint32_t code, bool down) {
  struct wlr_keyboard_key_event event = { .time_msec = now_ms(), .keycode = code,
  .update_state = true, .state = down ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED };
  ps5log("input key device=%s evdev=%u state=%u", keyboard->base.name, code, down);
+#if PS5WL_POWER
  ps5_power_activity();
+#endif
  wlr_keyboard_notify_key(keyboard, &event);
 }
 static void motion(struct wlr_pointer *pointer, double dx, double dy) {
  if (dx == 0 && dy == 0) return;
  struct wlr_pointer_motion_event event = { .pointer = pointer, .time_msec = now_ms(),
  .delta_x = dx, .delta_y = dy, .unaccel_dx = dx, .unaccel_dy = dy };
+#if PS5WL_POWER
  ps5_power_activity();
+#endif
  wl_signal_emit_mutable(&pointer->events.motion, &event);
 }
 static void buttons(struct wlr_pointer *pointer, uint32_t old, uint32_t next) {
@@ -68,7 +72,9 @@ static void buttons(struct wlr_pointer *pointer, uint32_t old, uint32_t next) {
   struct wlr_pointer_button_event event = { .pointer = pointer, .time_msec = now_ms(),
   .button = codes[i], .state = next & (1u << i) ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED };
   ps5log("input pointer=%s button=%u state=%u", pointer->base.name, event.button, event.state);
+#if PS5WL_POWER
   ps5_power_activity();
+#endif
   wlr_pointer_notify_button(pointer, &event);
  }
 }
@@ -79,7 +85,9 @@ static void axis(struct wlr_pointer *pointer, double delta, bool horizontal, boo
  .orientation = horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL,
  .relative_direction = WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL,
  .delta = delta, .delta_discrete = wheel ? (int)(delta / 15) * 120 : 0 };
+#if PS5WL_POWER
  ps5_power_activity();
+#endif
  wl_signal_emit_mutable(&pointer->events.axis, &event);
 }
 static uint32_t u32(const unsigned char *p) { uint32_t v; memcpy(&v, p, sizeof(v)); return v; }

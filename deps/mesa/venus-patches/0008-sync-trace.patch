@@ -1,0 +1,132 @@
+From: ps5wl contributors
+Subject: [PATCH] venus: trace asynchronous WSI and forward PS5 diagnostics
+
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -419,7 +419,12 @@
+          return result;
+    }
+ 
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-submit-begin queue=%p tid=%d",
++             (void *)queue_handle, vn_gettid());
+    result = vn_QueueSubmit(queue_handle, 0, NULL, queue->async_present.fence);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-submit-end result=%d", result);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -432,8 +437,13 @@
+       simple_mtx_unlock(&queue->async_present.queue_mutex);
+    vn_wsi_chains_unlock(dev, queue->async_present.info, /*all=*/false);
+ 
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-wait-begin fence=%p",
++             (void *)queue->async_present.fence);
+    result = vn_WaitForFences(dev_handle, 1, &queue->async_present.fence, true,
+                              UINT64_MAX);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-wait-end result=%d", result);
+ 
+    vn_wsi_chains_lock(dev, queue->async_present.info, /*all=*/false);
+    if (can_unlock_queue)
+@@ -466,7 +476,11 @@
+       vn_wsi_chains_unlock(dev, queue->async_present.info, /*all=*/false);
+    }
+ 
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-sync-fd-wait-begin fd=%d", fd);
+    sync_wait(fd, -1);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-sync-fd-wait-end fd=%d", fd);
+ 
+    if (queue) {
+       vn_wsi_chains_lock(dev, queue->async_present.info, /*all=*/false);
+@@ -490,8 +504,14 @@
+    /* Being able to acquire the lock ensures async present queue access
+     * has completed.
+     */
++   if (VN_DEBUG(WSI))
++      vn_log(NULL, "sync-trace wsi-flush-lock-begin queue=%p tid=%d",
++             (void *)queue_handle, vn_gettid());
+    simple_mtx_lock(&queue->async_present.queue_mutex);
+    simple_mtx_unlock(&queue->async_present.queue_mutex);
++   if (VN_DEBUG(WSI))
++      vn_log(NULL, "sync-trace wsi-flush-lock-end queue=%p",
++             (void *)queue_handle);
+ }
+ 
+ static VkPresentInfoKHR *
+@@ -750,6 +770,9 @@
+ 
+    queue->async_present.tid = vn_gettid();
+    queue->async_present.initialized = true;
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-thread-start queue=%p tid=%d",
++             (void *)vn_queue_to_handle(queue), queue->async_present.tid);
+ 
+    mtx_lock(&queue->async_present.mutex);
+    while (true) {
+@@ -764,9 +787,15 @@
+ 
+       queue->async_present.pending = false;
+ 
++      if (VN_DEBUG(WSI))
++         vn_log(dev->instance, "sync-trace wsi-common-present-begin chains=%u",
++                queue->async_present.info->swapchainCount);
+       queue->async_present.result =
+          wsi_common_queue_present(queue_vk->base.device->physical->wsi_device,
+                                   queue_vk, queue->async_present.info);
++      if (VN_DEBUG(WSI))
++         vn_log(dev->instance, "sync-trace wsi-common-present-end result=%d",
++                queue->async_present.result);
+ 
+       vn_wsi_chains_unlock(dev, queue->async_present.info, /*all=*/true);
+       simple_mtx_unlock(&queue->async_present.queue_mutex);
+--- a/src/virtio/vulkan/vn_common.c
++++ b/src/virtio/vulkan/vn_common.c
+@@ -89,13 +89,33 @@
+    }
+ }
+ 
++#ifdef PS5WL_VENUS_PS5
++/* Installed before vkCreateInstance, before Venus starts worker threads. */
++static void (*vn_payload_log_handler)(const char *);
++
++__attribute__((visibility("default"))) void
++ps5wl_venus_set_log_handler(void (*handler)(const char *))
++{
++   vn_payload_log_handler = handler;
++}
++#endif
++
+ void
+ vn_log(struct vn_instance *instance, const char *format, ...)
+ {
+    va_list ap;
+ 
+    va_start(ap, format);
+-   mesa_log_v(MESA_LOG_DEBUG, "MESA-VIRTIO", format, ap);
++#ifdef PS5WL_VENUS_PS5
++   if (vn_payload_log_handler) {
++      char message[1024];
++      vsnprintf(message, sizeof(message), format, ap);
++      vn_payload_log_handler(message);
++   } else
++#endif
++   {
++      mesa_log_v(MESA_LOG_DEBUG, "MESA-VIRTIO", format, ap);
++   }
+    va_end(ap);
+ 
+    /* instance may be NULL or partially initialized */
+--- a/src/amd/vulkan/vulkan_ps5.sym
++++ b/src/amd/vulkan/vulkan_ps5.sym
+@@ -2,6 +2,7 @@
+ 	global:
+ 		vk[A-Z]*;
+ 		vk_icd*;
++		ps5wl_venus_set_log_handler;
+ 	local:
+ 		*;
+ };

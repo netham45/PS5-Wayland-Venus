@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,9 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef PS5WL_PS5
+#include "ps5log.h"
+#endif
 
 #define LIMIT 4096u
 #define MAX_WORDS (4u * 1024u * 1024u)
@@ -43,6 +47,19 @@ static int listener_wake[2] = {-1, -1};
 static pthread_t accept_thread;
 static bool accepting;
 static char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+static void sync_trace(const char *format, ...)
+{
+    char message[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+#ifdef PS5WL_PS5
+    ps5log("vtest sync-trace %s", message);
+#else
+    fprintf(stderr, "vtest sync-trace %s\n", message);
+#endif
+}
 static uint64_t now_ms(void)
 {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -90,6 +107,13 @@ static void check_waits(struct client *c)
             if (w->any) done |= ready; else done &= ready;
         }
         if (!done && now < w->deadline) { p = &w->next; continue; }
+        sync_trace("wait-ready ctx=%u points=%u complete=%u timeout=%u",
+                   c->ctx, w->count, done, !done);
+        for (unsigned i = 0; i < w->count; i++)
+            sync_trace("wait-point ctx=%u sync=%u requested=%llu value=%llu",
+                       c->ctx, w->points[i].id,
+                       (unsigned long long)w->points[i].value,
+                       (unsigned long long)c->syncs[w->points[i].id].value);
         /* Keep our read end until after writing, so a dead client cannot raise
          * SIGPIPE in the compositor. Exactly one byte is ever written. */
         { char byte = 1; ssize_t n; do { n = write(w->writefd, &byte, 1); } while (n < 0 && errno == EINTR); }
@@ -99,7 +123,8 @@ static void check_waits(struct client *c)
 }
 static void retire(void *opaque, uint32_t ring, uint64_t fence)
 {
-    (void)ring;
+    sync_trace("retire ctx=%u ring=%u fence=%llu", ((struct client *)opaque)->ctx,
+               ring, (unsigned long long)fence);
     struct client *c = opaque;
     pthread_mutex_lock(&c->mutex);
     struct pending **p = &c->pending;
@@ -137,6 +162,8 @@ static bool submit(struct client *c, uint32_t *p, uint32_t n)
         if (ok) { pending->next = c->pending; c->pending = pending; c->pending_count++; }
         pthread_mutex_unlock(&c->mutex);
         if (!ok) { free(pending); return false; }
+        sync_trace("submit ctx=%u ring=%u fence=%llu points=%u", c->ctx, b[5],
+                   (unsigned long long)pending->fence, b[4]);
         if (!gpud_core_fence(c->ctx, 0, b[5], pending->fence)) return false;
     }
     return true;
@@ -223,6 +250,8 @@ static bool command(struct client *c, uint32_t cmd, uint32_t *p, uint32_t n)
         }
         if (ok) {
             /* Send before publishing: an immediate callback must not close the fd. */
+            sync_trace("wait-create ctx=%u points=%u any=%u timeout_ms=%u",
+                       c->ctx, count, w->any, p[1]);
             ok = reply(c, cmd, NULL, 0) && send_fd(c, fds[0]);
             if (ok) { w->next = c->waiting; c->waiting = w; c->waiting_count++; check_waits(c); }
         }

@@ -2,3 +2,5 @@ option('console_test_seconds', type: 'integer', value: 0, min: 0, max: 90,
   description: 'Terminate PS5 hardware validation after this many seconds (0 disables)')
 option('videoout_only', type: 'boolean', value: false,
   description: 'Isolate VideoOut scanout/flips without compositor clients or input')
+option('power', type: 'boolean', value: true,
+  description: 'Enable PS5 compositor PowerTick, remaining-seconds queries and idle timer')

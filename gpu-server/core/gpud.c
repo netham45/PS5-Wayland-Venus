@@ -19,9 +19,10 @@
 #endif
 
 struct resource { uint32_t id; uint64_t blob, shm_bytes; struct resource *next; };
-struct context { uint32_t id; uint64_t host_bytes, device_bytes; unsigned allocations; struct resource *resources; gpud_retire_fn retire; void *opaque; struct context *next; };
+struct context { uint32_t id; uint64_t host_bytes, device_bytes; unsigned allocations, callbacks; struct resource *resources; gpud_retire_fn retire; void *opaque; struct context *next; };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cb_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t callbacks_idle = PTHREAD_COND_INITIALIZER;
 static struct context *contexts;
 static uint32_t next_id = 1;
 static unsigned context_count, max_contexts;
@@ -33,12 +34,22 @@ static unsigned context_count, max_contexts;
 #define GPUD_DEFAULT_HOST_MIB 512
 #endif
 static bool started;
-static atomic_bool stopping;
+static atomic_bool stopping, wedged;
 static uint64_t host_limit, device_limit;
 static atomic_uint_fast64_t fd_exports;
 static void logger(enum virgl_log_level_flags level, const char *message, void *opaque);
 void gpud_record_fd_export(void) { atomic_fetch_add(&fd_exports, 1); }
 uint64_t gpud_fd_export_count(void) { return atomic_load(&fd_exports); }
+bool gpud_is_wedged(void) { return atomic_load(&wedged); }
+void gpud_mark_wedged(uint32_t ctx, const char *reason)
+{
+    atomic_store(&wedged, true);
+    atomic_store(&stopping, true);
+    char message[256];
+    snprintf(message, sizeof(message), "gpud wedged: ctx=%u %s; preserving devices, mappings and Vulkan DSO",
+             ctx, reason);
+    logger(VIRGL_LOG_LEVEL_ERROR, message, NULL);
+}
 bool gpud_memory_reserve(uint32_t id, bool host, uint64_t bytes)
 {
     bool ok = false;
@@ -88,15 +99,26 @@ void gpud_memory_release(uint32_t id, bool host, uint64_t bytes)
 }
 static void retire(uint32_t id, uint32_t ring, uint64_t fence)
 {
+    struct context *entry = NULL;
     gpud_retire_fn fn = NULL;
     void *opaque = NULL;
     pthread_mutex_lock(&cb_lock);
-    for (struct context *c = contexts; c; c = c->next)
-        if (c->id == id) { fn = c->retire; opaque = c->opaque; break; }
+    for (struct context *c = contexts; c; c = c->next) {
+        if (c->id == id) {
+            fn = c->retire; opaque = c->opaque;
+            if (fn) { entry = c; c->callbacks++; }
+            break;
+        }
+    }
     pthread_mutex_unlock(&cb_lock);
-    /* vkr context destruction joins callback threads before removing the
-     * registration. Never hold the shared registry lock across client code. */
-    if (fn) fn(opaque, ring, fence);
+    /* Quarantined Vulkan queue threads can outlive the front-end client. */
+    if (fn) {
+        fn(opaque, ring, fence);
+        pthread_mutex_lock(&cb_lock);
+        entry->callbacks--;
+        pthread_cond_broadcast(&callbacks_idle);
+        pthread_mutex_unlock(&cb_lock);
+    }
 }
 static void logger(enum virgl_log_level_flags level, const char *message, void *opaque)
 {
@@ -114,7 +136,7 @@ uint32_t gpud_core_context_create(const char *name, gpud_retire_fn fn, void *opa
     struct context *c = calloc(1, sizeof(*c));
     if (!c || !fn || atomic_load(&stopping)) { free(c); return 0; }
     pthread_mutex_lock(&lock);
-    if (!started || context_count >= max_contexts || !next_id) goto fail;
+    if (!started || atomic_load(&stopping) || context_count >= max_contexts || !next_id) goto fail;
     c->id = next_id++;
     c->retire = fn; c->opaque = opaque;
     if (!vkr_renderer_create_context(c->id, 4, strlen(name), name)) goto fail;
@@ -134,7 +156,16 @@ fail:
 void gpud_core_context_destroy(uint32_t id)
 {
     pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&cb_lock);
+    struct context *entry = contexts;
+    while (entry && entry->id != id) entry = entry->next;
+    if (entry) {
+        entry->retire = NULL; entry->opaque = NULL;
+        while (entry->callbacks) pthread_cond_wait(&callbacks_idle, &cb_lock);
+    }
+    pthread_mutex_unlock(&cb_lock);
     vkr_renderer_destroy_context(id);
+    if (gpud_is_wedged()) { pthread_mutex_unlock(&lock); return; }
     pthread_mutex_lock(&cb_lock);
     struct context **p = &contexts;
     while (*p && (*p)->id != id) p = &(*p)->next;
@@ -165,7 +196,7 @@ bool gpud_core_submit(uint32_t ctx, void *data, uint32_t size)
 }
 bool gpud_core_fence(uint32_t ctx, uint32_t flags, uint32_t ring, uint64_t fence)
 {
-    if (ring >= 64 || (flags & ~1u)) return false;
+    if (atomic_load(&stopping) || ring >= 64 || (flags & ~1u)) return false;
     pthread_mutex_lock(&lock);
     bool ok = vkr_renderer_submit_fence(ctx, flags, ring, fence);
     pthread_mutex_unlock(&lock); return ok;
@@ -208,6 +239,7 @@ out:
 void gpud_core_unref(uint32_t ctx, uint32_t res)
 {
     pthread_mutex_lock(&lock);
+    if (gpud_is_wedged()) { pthread_mutex_unlock(&lock); return; }
     vkr_renderer_destroy_resource(ctx, res);
     struct context *c = contexts;
     while (c && c->id != ctx) c = c->next;
@@ -233,6 +265,7 @@ int ps5wl_gpud_start(const struct ps5wl_gpud_config *config)
     device_limit = config->device_bytes_per_ctx ? config->device_bytes_per_ctx : UINT64_C(1024) * 1024 * 1024;
     atomic_store(&fd_exports, 0);
     atomic_store(&stopping, false);
+    atomic_store(&wedged, false);
     if (!vkr_renderer_init(VKR_RENDERER_THREAD_SYNC | VKR_RENDERER_ASYNC_FENCE_CB, &callbacks)) return -ENODEV;
     started = true;
     const char *path = config->vtest_path;
@@ -261,9 +294,10 @@ int ps5wl_gpud_stop(unsigned drain_ms)
     unsigned left = elapsed < drain_ms ? drain_ms - elapsed : 0;
     int render_result = gpud_render_drain(left);
     if (result || render_result) {
-        logger(VIRGL_LOG_LEVEL_ERROR, "gpud wedged: drain timed out; preserving mappings", NULL);
+        gpud_mark_wedged(0, "drain timed out");
         return -EBUSY;
     }
+    if (gpud_is_wedged()) return -EBUSY;
     vkr_renderer_fini(); started = false;
     char message[96];
     snprintf(message, sizeof(message), "gpud stopped: Vulkan fd-export calls=%" PRIu64, gpud_fd_export_count());

@@ -1,6 +1,6 @@
 --- a/cube/cube.c
 +++ b/cube/cube.c
-@@ -44,8 +44,13 @@
+@@ -44,8 +44,14 @@
  #include "xcb_loader.h"
  #endif
  #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
@@ -13,10 +13,11 @@
 +#include "ps5wl-client.h"
 +#include "ps5log.h"
 +extern int ps5wl_vulkan_install(void);
++extern void ps5wl_vulkan_dump_log(void);
  #endif
  
  #ifdef _WIN32
-@@ -126,12 +131,21 @@
+@@ -126,12 +131,22 @@
      } while (0)
  #endif  // VARARGS_WORKS_ON_ANDROID
  #else
@@ -24,6 +25,7 @@
 +#define ERR_EXIT(err_msg, err_class) \
 +    do { \
 +        ps5log("FAIL %s: %s", err_class, err_msg); \
++        ps5wl_vulkan_dump_log(); \
 +        ps5log_flush_wait(30000); \
 +        exit(1); \
 +    } while (0)
@@ -160,7 +162,7 @@
  
  void* vulkan_library;
  
-@@ -198,12 +199,20 @@
+@@ -198,12 +199,25 @@
  
      vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
  #else  // Assume everything else supports dlopen
@@ -180,6 +182,11 @@
      vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
 +    if (!vkGetInstanceProcAddr)
 +        vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vk_icdGetInstanceProcAddr");
++#if defined(PS5WL_PS5) && defined(PS5WL_VENUS) && defined(PS5WL_SYNC_TRACE)
++    extern int ps5wl_vulkan_trace_bind(void *library);
++    if (ps5wl_vulkan_trace_bind(library))
++        return VK_ERROR_INITIALIZATION_FAILED;
++#endif
  #endif
      if (vkGetInstanceProcAddr == NULL) {
          return VK_ERROR_INITIALIZATION_FAILED;

@@ -1,0 +1,16 @@
+From: ps5wl contributors
+Subject: [PATCH] lavapipe: isolate Mesa C11 threads from the PS5 SDK ABI
+
+Pacbrew's 0022 patch already renames Mesa's emulated C11 symbols for PS5
+RADV. Apply the same isolation to the standalone lavapipe payload: the SDK's
+mtx_init returns thrd_success=4, while Mesa's implementation uses 0. Without
+renaming, static link resolution selects the SDK implementation and
+vk_instance_init rejects a successfully initialized mutex.
+
+--- a/meson.build
++++ b/meson.build
+@@ -1735,3 +1735,3 @@
+-if with_radv_ps5_console
++if with_radv_ps5_console or (with_swrast_vk and host_machine.system() == 'freebsd')
+   pre_args += '-DC11_THREADS_RENAME'
+ endif

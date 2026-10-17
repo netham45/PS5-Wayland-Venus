@@ -42,6 +42,7 @@ if [[ $MODE == ps5 ]]; then
     args+=(--cross-file "$ROOT/build/ps5/cross.ini" --native-file "$ROOT/build/ps5/native.ini" --default-library=static)
     args+=("-Dconsole_test_seconds=${PS5WL_TEST_SECONDS:-0}")
     args+=("-Dvideoout_only=${PS5WL_VIDEOOUT_ONLY:-false}")
+    args+=("-Dpower=${PS5WL_POWER:-true}")
 else
     export CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib
     export LDFLAGS="-fuse-ld=lld -Wl,-rpath,$PREFIX/lib"

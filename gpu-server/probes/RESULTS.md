@@ -1,8 +1,11 @@
 # GPU console probes C1 / C2 / C3 / C4
 
-Status: **C1, all three C2a sizes, C2b, and the initial C3 completed.** C4's
-first run stalled after the first asynchronous present; investigation and the
-corrected rerun are recorded below. Shared-SHM GPU import,
+Status: **C1, all three C2a sizes, C2b, and current corrected C3 completed.**
+Both power-disabled A and PowerTick/getter-only B passed readback and clean
+shutdown. Corrected **C4 still stalls after its first asynchronous present**;
+its post-shutdown process check lost connectivity. After user recovery, L5
+failed at `vkCreateInstance` without losing console connectivity. The final
+refreshed installation is not accepted. Shared-SHM GPU import,
 GPU writes/readback, cross-process coherence, and in-app shared RADV execution
 passed. **App flexible headroom at the measured baseline was only 428,867,584
 bytes (409 MiB); SHM is counted against it.** The 1 GiB map failed ENOMEM.
@@ -545,4 +548,301 @@ vkr context destruction and gpud stop each completed within one millisecond.
 The corrected standard ASan/LSan/UBSan host suite passed after the core logging
 and Venus changes (`host-final-suite.log`): 120 presents, malformed/stalled-peer
 isolation, pipe waits, killed-client SHM baseline and two simultaneous clients.
-Full-HD and corrected console evidence follow below when exercised.
+Full-HD host acceptance also passed (`host-full-hd-suite.log`): 600 presents
+at 1920x1080 for the single client and both concurrent clients, with killed-client
+SHM counts `(0, 0) → (12, 22) → (0, 0)` (`host-full-hd/cleanup.log`) and zero
+Vulkan fd exports. The constrained rerun after patch 0007 correctly returned
+`vkCreateSwapchainKHR result=-1 extent=1920x1080 format=44 images=4`, after which
+the upstream cube's `assert(!err)` aborted the client; the server logged no
+missing object/decoder-fatal error and stopped cleanly (`host-ps5-checked/`).
+That constrained cube run is an expected-OOM reproduction, **not a 600-frame
+pass**. The dedicated allocation regression is the passing quota-recovery check.
+
+## Corrected native thread identity and idle-power containment
+
+Following the user-confirmed power cycle, Ps5Backend safely established the
+private timer APIs' no-argument ABI through read-only native function-byte
+inspection, then built shared `compositor/src/backend/ps5/power.{c,h}` support.
+Its session keepalive PID 88 appears as `payload.elf`, **not** `ps5wl-*`.
+Main initially missed that generic process name and requested another launch;
+the second process 94 disappeared immediately while the existing port-9539
+keepalive continued. It was not a second resident keepalive.
+
+The no-GPU actual-Venus-thread-ID probe was rebuilt with the shared power helper,
+then run as plain payload 95. Pre/post process checks and the upload/run receipt
+are `thread-id-{before,started,after,run}.log`. Log observer exit **0**:
+
+```text
+[874970 ms] ps5wl-venus-thread-id: power thread-id-startup remaining_before=0 tick_rc=0 reset_rc=0 remaining_after=0
+[874981 ms] ps5wl-venus-thread-id: vn_gettid main=101823 worker0=101826 worker1=101827 stable=1,1,1 RESULT PASS
+```
+
+These are three distinct, simultaneously live native thread IDs, stable across
+10,000 queries per thread, from the corrected function body. This is not a run
+of the unsafe old no-output-pointer syscall. The old ABI defect is established
+by source/signature review; no deliberately unsafe reproduction was run.
+
+The raw cached idle remaining value was **0**, before and after successful
+PowerTick/Reset calls, in both the probe and keepalive samples. This records
+API results, **not proof of a positive countdown reset or full idle/rest-mode
+protection**. Bounded foreground reruns also log remaining seconds at startup.
+
+An intervening actor launched old installer 96 and old non-gpud compositor 98
+with demo 99 during that probe's log window. `intervening-compositor.log` identifies
+the old build (no gpud or power-startup line). The title-checked shipping close
+helper 100 closed that known project title; `old-app-close.log` records
+SuspendApp, owned title kill and KillApp all returning zero and foreground
+`0xffffffff`. A new unidentified plain payload 101 appeared in the post-check;
+it was not signalled. Main was notified to coordinate the overlapping activity.
+
+## Corrected C3 attempt — connectivity loss, mandatory safety stop
+
+Main confirmed that the overlapping old-app launches above were the user
+pressing the icon, then obtained exclusive console time. Shipping close helper
+106 closed old title 103, with all close returns zero. Installer 96 and session
+keepalive 88 were intentionally left resident. The next isolated diagnostic
+launched driver 107, bounded compositor 108 and demo 109, then the corrected
+Venus readback payload 110. Receipts and process snapshots are
+`exclusive-close-*.log` and `c3-corrected-*.log`.
+
+The compositor artifact was SHA256
+`d61058fad6032c04bc010c54fa52e284e017f13df91f0b832f6149571fa70060`,
+11,195,920 bytes. Exact terminal evidence:
+
+```text
+[1084431 ms] ps5wl-compositor: gpud start result=0; compositor renderer remains pixman
+[1084431 ms] ps5wl-compositor: power startup remaining_before=0 tick_rc=0 reset_rc=0 remaining_after=0
+[1084459 ms] ps5wl-compositor: bounded hardware validation shutdown in 60 seconds
+[1084459 ms] ps5wl-compositor: [../../../compositor/src/ps5wl.c:1362] Running Wayland compositor on WAYLAND_DISPLAY=/system_tmp/wayland-0
+[1084696 ms] ps5wl-compositor: [../../../compositor/src/ps5wl.c:792] client surface committed 1920x1080 count=1
+[1085366 ms] ps5wl-compositor: flip-event seq=56 index=1 monotonic=1085.366834900
+```
+
+`c3-corrected-client.log`:
+
+```text
+ps5ctl: Cannot connect to 192.168.3.211:9591: timed out
+```
+
+The mandatory post-failure process check, `c3-corrected-failure-processes.log`:
+
+```text
+ps5ctl: [Errno 113] No route to host
+```
+
+All new console actions stopped immediately; no further ping or console retry
+was issued by this agent. The already-running host diagnostic observers later
+expired: body log status 124, driver log status 124, harness exit **1**. There
+is no clean-shutdown/LoadExec, successful readback, or context-created line in
+this attempt. Absence of retrieved client lines is not proof that client
+`main` was never entered. Console power/screen state at loss was not observed
+by this agent, so **crash, power-down and network loss remain unproven causes**.
+
+### Ranked deltas versus the first passing C3
+
+| Rank / candidate | Evidence and limits |
+| --- | --- |
+| 1. New in-app power calls, especially private Reset | The compositor now performs Get → PowerTick → Reset → Get at startup, adds a 10-second refresh timer, and ticks for dispatched input. Startup calls returned zero 935 ms before the last flip. The no-argument ABI was decoded, but the private Reset tail target's full semantics were not. A deferred or BigApp-context side effect is a hypothesis, not demonstrated. |
+| 2. Client-triggered driver load / context creation | `vkr_renderer_init` only initializes flags, callbacks and the context list; it does **not** load RADV or create a Vulkan device at compositor startup. `vkr_context_create` does load the Vulkan library, and the `context created` log is emitted **after** that returns. Thus no completed-context line does not exclude an in-progress RADV `dlopen`. |
+| 3. New Venus 0006 / 0007 | 0006 fixes the invalid FreeBSD thread-ID syscall and passed the actual native three-thread test. 0007 changes allocation replies after device/context initialization; its real host OOM/recovery regression passed. Neither is established as the connectivity-loss cause. The failed attempt never supplied enough client logging to locate its exact last call. |
+| 4. GPU-server changes | Since the passing C3's context lifecycle logging, the only core-runtime addition was a quota-rejection log/prototype. Quotas, vtest protocol, imported-memory patch and startup logic were unchanged. That rejection branch is not used before a context allocates memory. |
+| 5. External power or network event | The previous loss followed clean shutdown; this one stopped during startup/client launch. User-observed power state is needed to distinguish them. No captured GPU-fault, device-lost or wedged-fence message establishes a GPU hang. |
+
+The 10-second compositor timer had **not** fired: first due time was about
+1094431 ms, beyond the 1085366-ms last flip. The background keepalive's last
+captured reset was 1079888 ms; its next was due at 1109888 ms, also beyond the
+loss. Therefore the logs do not show literal simultaneous reset calls, although
+both processes had used the same private API in different process contexts.
+Keepalive had already returned zero over 17 samples spanning 450 seconds.
+There were no logged key/button/axis events in the short failed window; motion
+ticks do not have an independent log, so per-input calls are not ruled out.
+
+The RADV discovery path did **not** change between C3 runs:
+`/data/ps5wl/libvulkan.so.1`, not the C2 probe's separate
+`/data/ps5wl/probe-radv.so.1`. No new installer was deployed by this agent before
+the failed run; the user's old installer did not log writing a Vulkan asset.
+Host `build/ps5/sysroot/lib/libvulkan.so.1` and `launcher/vulkan.so` both hash to
+`acbee912f24388b455f918367715632cd3b2be2fa5a8938f94c8ac753cf17e08`.
+The actual console file's hash was not measured and is not asserted.
+The isolated launch route and 60-second containment matched the passing C3.
+
+### Approved minimal power isolation
+
+Main relayed user recovery after a fresh power cycle: only Payload Manager
+and elfldr were present, with no installer or keepalive. To minimize costly
+power-cycle failures, the coordinator replaced the longer reconstruction
+proposal with current-source power isolation. The private
+`sceShellCoreUtilResetAutoPowerDownTimer` call is removed permanently from
+the compositor; only the separate plain keepalive payload may call it.
+
+The exact initial 11,177,560-byte passing bounded compositor was overwritten
+by subsequent power builds/repackaging; it was not hashed or copied at that
+run. No previous binary was found in the retained compositor/launcher artifact
+paths. Git `b8c8638` / `c052ffc` preserve the pre-power compositor sources;
+checkpoint `0b53820` includes the power WIP. A source-equivalent baseline can be
+reconstructed with the first C3's exact context-logging additions, but must
+**not** be described as a byte-identical previously passing artifact.
+
+Approved sequence, stopping at the first unexpected failure:
+
+1. **A, no client:** current GPU-server and current Venus 0006/0007 sources,
+   bounded 60-second compositor with **all compositor power calls compiled
+   out**, no keepalive. Observe startup and clean exit.
+2. **A, readback:** the exact same artifact plus corrected Venus readback.
+3. **B, readback:** enable only compositor PowerTick plus remaining-time getter
+   (never private Reset), and repeat the bounded readback run.
+4. Run G4: cube, 600 presents, inspected PNG, kill/relaunch and resource cleanup.
+5. Restart the separate plain keepalive only after the preceding GPU checks.
+6. Run Lavapipe L5, then the final normal install/demo PNG/shipping-close check.
+
+The build interface is `PS5WL_POWER=false` / Meson `-Dpower=false`; disabling
+power omits its module and compiles out startup, timer and input hooks rather
+than returning fake success from stubs. Step A therefore cannot sample the
+remaining timer from inside the app. Startup getter logging returns in B.
+Each action retains mandatory before/after process checks. Runs must be short
+and sequential because idle auto-power-down remains a competing risk.
+No budgets, app process creation, or deliberate GPU-fault probes are allowed.
+
+Current failed compositor, current Venus payloads/ICD, native RADV and normal
+installer were preserved in `bisect-preserved/` before further builds. The
+approved power-isolation runs, final normal installation, automated PNG/close
+check, corrected C4, and Lavapipe L5 are not yet claimed as passes here.
+
+### A: all compositor power calls disabled — both runs passed
+
+Artifact `bisect-preserved/no-power-compositor-60.elf`, SHA256
+`91684592e81404f52e927b85eb40db8b032b2379bd13c32389ed200fcccbcf1e`,
+11,177,672 bytes, retains the current GPU-server and the corrected Venus
+0006/0007 client. Backend's offline symbol inspection found no PowerTick,
+remaining-time getter, or private Reset import in this artifact. Native
+startup has no power/timer sample in A by design.
+
+`power-a-alone-*.log`: driver 85, compositor 86, demo 87; no Venus client,
+installer or keepalive. After 60 seconds:
+
+```text
+[345217 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[345217 ms] ps5wl-compositor: gpud stop result=0
+[345311 ms] ps5wl-compositor: PS5 backend released VideoOut flips=3597
+[345311 ms] ps5wl-compositor: compositor clean shutdown
+[346457 ms] ps5wl-launch-diag: diagnostic result=0 child=86
+```
+
+`power-a-readback-*.log`: same artifact, driver 89, compositor 90, demo 91,
+Venus readback 92:
+
+```text
+[358936 ms] ps5wl-compositor: gpud: context created id=1 name=payload.elf contexts=1
+[358966 ms] ps5wl-vktest: GPU readback words=16384 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[358968 ms] ps5wl-vktest: RESULT PASS
+[358969 ms] ps5wl-compositor: gpud: context destroyed id=1 resources_released=0 released_host_charge_bytes=0 released_device_charge_bytes=0 contexts=0
+[418074 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[418074 ms] ps5wl-compositor: gpud stop result=0
+[418167 ms] ps5wl-compositor: PS5 backend released VideoOut flips=3598
+[418167 ms] ps5wl-compositor: compositor clean shutdown
+[419329 ms] ps5wl-launch-diag: diagnostic result=0 child=90
+```
+
+Both diagnostic harnesses exited **0**, and the readback log observer exited
+**0**. Both post-run process snapshots contained no compositor, demo, client,
+installer or keepalive; Payload Manager 83 and elfldr 81 remained responsive.
+This passes current corrected C3 without compositor power calls. It does not
+attribute the earlier loss specifically to private Reset: both the in-app
+power bundle and background helper were absent in A. B is the next approved
+single-variable test; no C4/L5/final-install acceptance is inferred.
+
+### B: PowerTick and getter only — corrected C3 passed
+
+`bisect-preserved/power-tick-only-compositor-60.elf`, SHA256
+`06e3556a5444f07a723de363301cd52ca0cfba05dc517823b90c44dc87d1a915`,
+11,179,640 bytes. Private Reset is absent; background keepalive stayed off.
+`power-b-readback-*.log`: driver 94, compositor 95, demo 96, readback 97.
+
+```text
+[474073 ms] ps5wl-compositor: power startup remaining_before=0 tick_rc=0 remaining_after=0
+[475109 ms] ps5wl-vktest: GPU readback words=16384 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[475111 ms] ps5wl-vktest: RESULT PASS
+[534121 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[534121 ms] ps5wl-compositor: gpud stop result=0
+[534217 ms] ps5wl-compositor: compositor clean shutdown
+[535354 ms] ps5wl-launch-diag: diagnostic result=0 child=95
+```
+
+Startup plus six 10-second periodic samples all returned `tick_rc=0`,
+`remaining_before=0`, `remaining_after=0`. Diagnostic and client observers
+exited **0**; post-run `ps` remained responsive with no app/client/helper.
+Neither this nor A proves a positive idle countdown, physical input activity,
+or that the prior startup loss was specifically caused by private Reset.
+
+### Corrected C4 — same first-present stall, then post-exit connectivity loss
+
+The exact B artifact above was reused, changing only the client from readback
+to the current corrected Venus cube. No keepalive/private Reset was running.
+`c4-corrected-*.log`: driver 99, compositor 100, demo 101, cube 102.
+The client extracted the 2,030,528-byte current Venus ICD, created its device
+and swapchain, and stopped at:
+
+```text
+[560274 ms] ps5wl-vkcube: Vulkan prepare call completed
+[560288 ms] ps5wl-vkcube: vkcube presented frame=1
+```
+
+After 42 seconds there was no frame 60/600 or cube wl_shm buffer commit.
+The mandatory timeout process snapshot remained responsive: compositor
+100 at 310.4 MiB, cube 102 at 19.1 MiB, demo 101 present. The server had
+imported four 8,306,688-byte staging blobs, plus 262,144 and two 16,384-byte
+blobs. No quota-rejection, device-lost, or wedged message was captured.
+Demo scanout continued at 59.94 Hz; PowerTick/getter samples continued returning
+zero. At the existing 60-second containment boundary:
+
+```text
+[619217 ms] ps5wl-compositor: bounded hardware validation timeout; releasing VideoOut
+[619217 ms] ps5wl-compositor: gpud: vkr: destroying context 1 (vkcube) with a valid instance
+[619217 ms] ps5wl-compositor: gpud: vkr: destroying device with valid objects
+[619219 ms] ps5wl-compositor: gpud: context destroyed id=1 resources_released=10 released_host_charge_bytes=43106304 released_device_charge_bytes=0 contexts=0
+[619219 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[619219 ms] ps5wl-compositor: gpud stop result=0
+[619318 ms] ps5wl-compositor: PS5 backend released VideoOut flips=3597
+[619318 ms] ps5wl-compositor: compositor clean shutdown
+[620504 ms] ps5wl-launch-diag: diagnostic result=0 child=100
+```
+
+Diagnostic harness exit **0**. Nevertheless the mandatory post-run process
+snapshot in `c4-corrected-after.log` returned `Errno 113: No route to host`.
+**All console actions stopped again.** The receipt-owned cube cleanup
+conditional was not reached; no kill was issued. No PNG was taken because
+the 600-present gate never arrived. No kill/relaunch or final installation
+acceptance is claimed. The user subsequently power-cycled before the L5
+run below.
+
+Both observed C4 losses therefore followed forced cleanup of a stalled cube
+context, while A/B readback contexts completed before bounded teardown and
+their post-run process checks succeeded. This correlation motivates guarded
+teardown and fence/WSI tracing; it does not by itself establish a GPU fault.
+The upstream device teardown conditional is **enabled in this build**:
+`gpu-server/meson.build` defines `ENABLE_RENDER_SERVER_WORKER_THREAD=1`, so
+`ctx->on_worker_thread` is true and `vkr_device_destroy` should call
+`vkDeviceWaitIdle`. An initial offline suspicion that the wait was skipped
+was corrected after checking the actual build configuration. No two-second
+idle-wait bound was found in the current device-destroy path.
+
+### L5 first run — Vulkan instance failure, console stayed responsive
+
+After Main relayed another fresh recovery, the bounded B compositor was
+launched with no Venus client or keepalive. `l5-*.log`: driver 85, compositor
+86, demo 87, separate CPU cube 88. The cube reported:
+
+```text
+[120523 ms] ps5wl-vkcube: client-init name=ps5wl-vkcube pid=88 display=/system_tmp/wayland-0 runtime=/system_tmp
+[124539 ms] ps5wl-vkcube: lavapipe library extracted bytes=70117688 path=/data/ps5wl/libvulkan-lavapipe.so.1
+[124638 ms] ps5wl-vkcube: wayland-connected fd=12
+[124640 ms] ps5wl-vkcube: FAIL vkCreateInstance Failure: vkCreateInstance failed.
+```
+
+The client exited after its failure log window; no frame was presented and
+no screenshot was taken. The upstream failure branch did not print its
+`VkResult` or dump captured Mesa stderr; that limitation is being corrected
+before another attempt. Both the failure process snapshot and the final
+post-diagnostic `ps` were responsive. Diagnostic harness exit **0**, no app,
+demo, cube or helper left; Payload Manager 83 and elfldr 81 remained.
+Thus this run is **not an L5 pass** and did not reproduce the C4 console loss.

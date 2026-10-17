@@ -1,0 +1,15 @@
+--- a/cube/cube.c
++++ b/cube/cube.c
+@@ -4238,4 +4238,12 @@
+     err = vkCreateInstance(&inst_info, NULL, &demo->inst);
++    if (err != VK_SUCCESS) {
++        ps5log("vkCreateInstance result=%d extensions=%u layers=%u", err,
++               inst_info.enabledExtensionCount, inst_info.enabledLayerCount);
++        for (uint32_t i = 0; i < inst_info.enabledExtensionCount; i++)
++            ps5log("instance extension[%u]=%s", i, inst_info.ppEnabledExtensionNames[i]);
++        for (uint32_t i = 0; i < inst_info.enabledLayerCount; i++)
++            ps5log("instance layer[%u]=%s", i, inst_info.ppEnabledLayerNames[i]);
++    }
+     if (err == VK_ERROR_INCOMPATIBLE_DRIVER) {
+         ERR_EXIT(
+             "Cannot find a compatible Vulkan installable client driver (ICD).\n\n"

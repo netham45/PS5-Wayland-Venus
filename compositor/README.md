@@ -118,3 +118,61 @@ Host builds also expose screencopy and virtual keyboard/pointer protocols for
 the pinned client integration tests. These injection protocols are not exposed
 on the console. See `src/backend/ps5/README.md` for backend design and hardware
 validation boundaries.
+
+## Native idle-power prevention
+
+With `PS5WL_POWER=true` (the default), the PS5 backend calls
+`sceSystemServicePowerTick()` for each dispatched key/motion/button/scroll event.
+It also calls PowerTick at startup and every ten seconds, including with no
+client activity. Startup/periodic logs on TCP 9530 include the native cached
+remaining seconds before/after the tick and its return code. The compositor
+never calls the private `sceShellCoreUtilResetAutoPowerDownTimer()` API.
+The backend owns and removes its timer during teardown; it does not change
+system Settings.
+
+For the approved power-disabled bisect, build with
+`env/run env PS5WL_TEST_SECONDS=60 PS5WL_POWER=false compositor/build.sh ps5`.
+This maps to Meson `-Dpower=false`: the native power module is omitted, all
+input/startup/getter calls are compiled out, and no power timer is created.
+This switch does not control a separately running background keepalive.
+
+The call pattern follows [PS4 Cast's idle-lobby fix, commit 1057d0674765](
+https://github.com/darkwitchblade/ps4-cast/commit/1057d0674765295a48b1da8188a526aa8ddf80d7)
+(PowerTick every frame), and [TokenStation5's ten-second PS5 loop, f4b2af4b9fc4](
+https://github.com/ThatRetiredDude/TokenStation5/commit/f4b2af4b9fc4c677199032f64d27ac21a7271cdc).
+Those are upstream implementation evidence, not hardware validation of ps5wl.
+The private query/reset no-argument ABI was separately verified on firmware
+10.60 by read-only SDK `mdbg_copyout` of the native functions:
+`build/ps5/evidence/power-abi.log`. The getter returns seconds directly, not
+through an output pointer; raw `65535` means absent/invalid cached state.
+Immediate before/after values may match because the getter reads shared state;
+subsequent periodic samples show whether the shell actually refreshed it.
+
+For a development session outside the foreground app, build and launch the
+separate background helper:
+
+```sh
+env/run bash compositor/tools/build.sh
+tools/ps5ctl run build/ps5/keepalive/ps5wl-keepalive.elf
+tools/ps5ctl logs --port 9539
+```
+
+The helper calls PowerTick plus the private auto-power-down timer reset at
+startup and every 30 seconds, logging its PID and remaining-seconds/return-code
+evidence. It has no VideoOut/GPU work, app spawning,
+Settings edits or autoload changes. Leave it running only for the authorized
+development session; stop its receipt-owned PID with `tools/ps5ctl kill PID`.
+If the SDK reports the generic `payload.elf` process name, that command's name
+guard refuses it: use `tools/ps5ctl kill PID --force` only after matching the
+exact PID to this helper's TCP 9539 startup log and upload receipt. Never use
+the override for a system or otherwise unidentified process.
+Stopping a host log observer does not stop the helper.
+
+Firmware 10.60 bounded background verification observed PID 88 (uid 1) through
+65 seconds, with startup and two 30-second refreshes. Every PowerTick/reset
+return code was zero, and cached remaining seconds were `0` before and after
+each refresh. Evidence is `build/ps5/evidence/keepalive.log` and
+`keepalive-final-processes.log`. The session helper was left running as requested.
+These samples establish successful calls and residency, not a positive countdown
+being reset or prevention through the console's full auto-rest timeout.
+

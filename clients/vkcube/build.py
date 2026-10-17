@@ -20,12 +20,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('target', choices=['host', 'ps5'])
     parser.add_argument('--driver', choices=['radv', 'venus', 'lavapipe'], default='radv')
+    parser.add_argument('--sync-trace', action='store_true',
+                        help='Enable Venus WSI tracing and PS5 live-log forwarding')
     args = parser.parse_args()
     if os.environ.get('PS5WL_BUILD_ENV') != '1':
         raise SystemExit('Use env/run clients/vkcube/build.sh host|ps5')
     target = args.target
     prefix = ROOT / 'build' / target / 'sysroot'
     driver = args.driver
+    if args.sync_trace and driver != 'venus':
+        parser.error('--sync-trace requires --driver venus')
     variant = '' if driver == 'radv' else '-' + driver
     binary = ROOT / 'build' / target / ('vkcube' + variant)
     if driver == 'venus':
@@ -73,6 +77,8 @@ def main():
                '-DPS5WL_VKTEST_LOG_PORT=' + ('9591' if target == 'ps5' else '0')]
     if driver == 'venus':
         common += ['-DPS5WL_VENUS=1']
+    if args.sync_trace:
+        common += ['-DPS5WL_SYNC_TRACE=1']
     if target == 'ps5' and driver == 'lavapipe':
         common += ['-DPS5WL_VKCUBE_DEFAULT_FRAMES=600']
     libs = ['-pthread']

@@ -17,9 +17,13 @@ if meson.is_cross_build()
   add_project_arguments('-DPS5WL_PS5', '-D__BSD_VISIBLE=1', language: 'c')
   add_project_arguments('-DPS5WL_TEST_SECONDS=' + get_option('console_test_seconds').to_string(), language: 'c')
   add_project_arguments('-DPS5WL_VIDEOOUT_ONLY=' + (get_option('videoout_only') ? '1' : '0'), language: 'c')
+  add_project_arguments('-DPS5WL_POWER=' + (get_option('power') ? '1' : '0'), language: 'c')
   sources += ['src/backend/ps5/backend.c', 'src/backend/ps5/input.c',
-    'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c', 'src/backend/ps5/power.c',
+    'src/backend/ps5/autostart.c', 'src/backend/ps5/capture.c',
     'src/backend/ps5/safety.c', '../common/ps5log/ps5log.c']
+  if get_option('power')
+    sources += ['src/backend/ps5/power.c']
+  endif
   includes += include_directories('../common/ps5log')
   cc = meson.get_compiler('c')
   if not get_option('videoout_only')

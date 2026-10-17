@@ -11,6 +11,7 @@
 #include "venus-thread-id-function.h"
 #ifdef PS5WL_PS5
 #include "ps5log.h"
+#include "power.h"
 #define report ps5log
 #else
 #define report(...) do { printf(__VA_ARGS__); putchar('\n'); } while (0)
@@ -33,6 +34,7 @@ int main(void)
 {
 #ifdef PS5WL_PS5
     if (ps5log_init("ps5wl-venus-thread-id", 9595)) return 1;
+    ps5_power_refresh("thread-id-startup");
 #endif
     pthread_t threads[2];
     struct sample samples[3] = {{0}};
