@@ -51,6 +51,13 @@ Every claim about the console is either cited evidence or marked
 - **LKL changes deferred (user, 2026-10-16):** no edits to `~/lkl-freebsd`.
   GPU milestone G5 (LKL virtio-gpu device) waits; `gpu-server/render` and
   `gpu-server/render/LKL-DEVICE.md` are the prepared interface.
+- **Vulkan confirmed (2026-10-16):** a separate `ps5wl-vkcube-venus.elf`
+  payload renders on the PS5 GPU through Venus → `ps5wl-gpud` (vkr + RADV
+  inside the compositor app) and presents via wl_shm; the user saw the rotating
+  cube on the TV launched into the icon-started app, Escape returned to the demo
+  and the whole-app exit returned to the PS5 UI. CPU Vulkan (lavapipe) payload
+  also passed 600 frames on console. Evidence: `gpu-server/probes/RESULTS.md`,
+  `build/ps5/evidence/gpu/final-gpu-*`.
 - **Compositor base:** wlroots with a custom `ps5` backend (VideoOut output,
   scePad/sceKeyboard/sceMouse input) and the pixman renderer. GPU composition on
   RADV (`VK_KHR_display`, `VK_EXT_external_memory_host`) later.
