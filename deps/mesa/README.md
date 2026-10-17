@@ -118,6 +118,18 @@ injected by a compiler proxy.
 `0002-wayland-without-videoout.patch` disables pacbrew's otherwise
 unconditional VideoOut WSI when Wayland is selected and removes its system
 module dependency. The driver and payloads do not link SceVideoOut.
+`0005-ps5-public-runtime-bindings.patch` keeps the canonical public SDK loader
+and executable-memory entries global in the PS5 version script. A linker
+dynamic list cannot undo `local:*` visibility; without this map change, the
+actual Venus/RADV ICD can still call its uninitialized private SDK wrappers
+even when a small unversioned shared-object regression passes.
+Audit the final driver, including its real version script, with:
+
+```sh
+env/run python3 deps/mesa/tests/public-runtime-bindings.py venus
+env/run python3 deps/mesa/tests/public-runtime-bindings.py radv
+env/run python3 deps/mesa/tests/public-runtime-bindings.py lavapipe
+```
 
 `0003-ps5-allocation-diagnostics.patch` reports the failed BO size, alignment,
 flags and the existing native direct-memory error string.
@@ -240,6 +252,8 @@ FIFO dispatch and platform-present completion. Other ICDs leave the sink
 unset; Venus forwards it through the same host/PS5 logging path.
 `0011-wsi-dispatch-stages.patch` further separates present-ID lock/condition
 waits from the zero-timeout Wayland loader dispatch and subsequent relock.
+`0012-wsi-initialization-trace.patch` reports display initialization stages,
+globals and failure result/error values through that same optional sink.
 
 ```sh
 env/run deps/mesa/build.sh host --driver venus

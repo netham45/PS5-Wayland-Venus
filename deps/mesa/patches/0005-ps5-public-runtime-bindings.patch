@@ -1,0 +1,21 @@
+From: ps5wl contributors
+Subject: [PATCH] ps5: keep public SDK runtime bindings interposable in ICDs
+
+The canonical compiler dynamic list cannot override a version-script local:*
+rule. Keep these public entries global so the shared-link exceptions reach the
+initialized payload CRT; all other non-Vulkan implementation symbols stay local.
+
+--- a/src/amd/vulkan/vulkan_ps5.sym
++++ b/src/amd/vulkan/vulkan_ps5.sym
+@@ -2,4 +2,11 @@
+ 	global:
+ 		vk[A-Z]*;
+ 		vk_icd*;
++		dlopen;
++		dlsym;
++		dladdr;
++		dlclose;
++		dlerror;
++		mmap;
++		mprotect;
+ 	local:

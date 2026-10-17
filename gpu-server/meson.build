@@ -54,7 +54,7 @@ if meson.is_cross_build()
   inc = [inc, include_directories('../common/ps5log')]
   sources += '../common/ps5log/ps5log.c'
 endif
-lib = static_library('ps5wl-gpud', sources, gen, 'core/gpud.c', 'vtest/vtest.c', 'render/render.c', 'render/wire.c', include_directories: inc, dependencies: deps, install: true)
+lib = static_library('ps5wl-gpud', sources, gen, 'core/gpud.c', 'core/unix_listener.c', 'vtest/vtest.c', 'render/render.c', 'render/wire.c', include_directories: inc, dependencies: deps, install: true)
 gpud_dep = declare_dependency(link_with: lib, include_directories: include_directories('include'), dependencies: deps)
 install_headers('include/ps5wl_gpud.h')
 pkg = import('pkgconfig')
@@ -68,6 +68,8 @@ if not meson.is_cross_build()
   mask = executable('memory-mask', 'tests/memory-mask.c', include_directories: inc)
   executable('pending-client', 'tests/pending-client.c', include_directories: inc, dependencies: deps)
   test('memory-mask', mask)
+  listener_test = executable('unix-listener-test', 'tests/unix-listener.c', 'core/unix_listener.c', include_directories: inc)
+  test('unix-listener', listener_test)
   executable('render-client', 'render/client.c', 'render/wire.c', include_directories: inc, dependencies: gpud_dep)
   wire_test = executable('render-wire-test', 'render/wire-test.c', 'render/wire.c', include_directories: inc, dependencies: threads)
   test('render-wire', wire_test)

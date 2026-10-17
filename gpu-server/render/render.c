@@ -1,6 +1,7 @@
 #include "render.h"
 #include "wire.h"
 #include "gpud_core.h"
+#include "unix_listener.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -328,9 +329,8 @@ int gpud_render_start(const char *path)
     server.stream = !transport || !strcmp(transport, "stream");
     int fd = socket(AF_UNIX, server.stream ? SOCK_STREAM : SOCK_SEQPACKET, 0);
     if (fd < 0) return -errno;
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    strcpy(addr.sun_path, path);
-    if (gpud_wire_cloexec(fd) || bind(fd, (struct sockaddr *)&addr, sizeof(addr))) {
+    if (gpud_wire_cloexec(fd) ||
+        gpud_unix_bind(fd, path, server.stream ? SOCK_STREAM : SOCK_SEQPACKET)) {
         int error = errno; close(fd); return -error;
     }
     if (listen(fd, 16)) { int error = errno; close(fd); unlink(path); return -error; }

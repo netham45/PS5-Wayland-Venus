@@ -122,14 +122,12 @@ Subject: [PATCH] venus: trace asynchronous WSI and forward PS5 diagnostics
     /* instance may be NULL or partially initialized */
 --- a/src/amd/vulkan/vulkan_ps5.sym
 +++ b/src/amd/vulkan/vulkan_ps5.sym
-@@ -2,6 +2,7 @@
+@@ -2,4 +2,5 @@
  	global:
  		vk[A-Z]*;
  		vk_icd*;
 +		ps5wl_venus_set_log_handler;
- 	local:
- 		*;
- };
+ 		dlopen;
 --- a/src/virtio/vulkan/vn_common.h
 +++ b/src/virtio/vulkan/vn_common.h
 @@ -324,4 +324,8 @@

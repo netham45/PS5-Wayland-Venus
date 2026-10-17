@@ -1,0 +1,29 @@
+From: ps5wl contributors
+Subject: [PATCH] wsi: expose Wayland display initialization failures in traces
+
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -1614,6 +1614,7 @@
+    VkResult result = VK_SUCCESS;
+    memset(display, 0, sizeof(*display));
+ 
++   wsi_trace_stage(wsi_wl->wsi, "wsi-wl-display-init-begin");
+    if (!u_vector_init(&display->formats, 8, sizeof(struct wsi_wl_format)))
+       return VK_ERROR_OUT_OF_HOST_MEMORY;
+ 
+@@ -1652,2 +1653,7 @@
+    wl_display_roundtrip_queue(display->wl_display, display->queue);
++   if (wsi_wl->wsi->trace_stage) {
++      char message[192];
++      snprintf(message, sizeof(message), "wsi-wl-display-globals shm=%p dmabuf=%p error=%d errno=%d", (void *)display->wl_shm, (void *)display->wl_dmabuf, wl_display_get_error(wl_display), errno);
++      wsi_trace_stage(wsi_wl->wsi, message);
++   }
+    /* This selects the presentation transport, not a software Vulkan device.
+@@ -1745,2 +1751,7 @@
+ fail:
++   if (wsi_wl->wsi->trace_stage) {
++      char message[192];
++      snprintf(message, sizeof(message), "wsi-wl-display-init-failed result=%d error=%d errno=%d", result, wl_display_get_error(wl_display), errno);
++      wsi_trace_stage(wsi_wl->wsi, message);
++   }
+    wsi_wl_display_finish(display);

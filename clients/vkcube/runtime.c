@@ -328,6 +328,7 @@ int ps5wl_vulkan_install(void) {
 #endif
 #ifdef PS5WL_SYNC_TRACE
     if (setenv("VN_DEBUG", "wsi", 1)) return -1;
+    if (setenv("WAYLAND_DEBUG", "client", 1)) return -1;
 #endif
 #ifdef PS5WL_PS5
 #ifdef PS5WL_FAULT_TRACE

@@ -13,3 +13,12 @@
      if (err == VK_ERROR_INCOMPATIBLE_DRIVER) {
          ERR_EXIT(
              "Cannot find a compatible Vulkan installable client driver (ICD).\n\n"
+@@ -4703,2 +4711,8 @@
+     err = vkGetPhysicalDeviceSurfaceFormatsKHR(demo->gpu, demo->surface, &formatCount, NULL);
++    if (err != VK_SUCCESS) {
++        ps5log("vkGetPhysicalDeviceSurfaceFormatsKHR result=%d", err);
++#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
++        ps5log("Wayland display error=%d", wl_display_get_error(demo->wayland_display));
++#endif
++    }
+     assert(!err);

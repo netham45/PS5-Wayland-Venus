@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import tempfile
 import time
@@ -13,10 +14,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def ready(path, process):
     end = time.monotonic() + 20
-    while not path.exists():
+    while True:
         if process.poll() is not None or time.monotonic() > end:
             raise RuntimeError(f'{path}: server did not become ready')
-        time.sleep(.02)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.connect(str(path))
+            return
+        except (ConnectionRefusedError, FileNotFoundError):
+            time.sleep(.02)
 
 def stop(p):
     if p.poll() is None:
@@ -60,6 +66,7 @@ def main():
     logs = ROOT/'build/gpud/logs'/mode
     logs.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(build/'memory-mask')], check=True)
+    subprocess.run([str(build/'unix-listener-test')], check=True)
     with tempfile.TemporaryDirectory(prefix='gpud-', dir=ROOT/'build') as temp:
         runtime = Path(temp)
         env = dict(os.environ, XDG_RUNTIME_DIR=temp, WAYLAND_DISPLAY='gpud-wayland',
@@ -72,6 +79,10 @@ def main():
         if a.sync_trace:
             env.update(VN_DEBUG='vtest,wsi', MESA_LOG_LEVEL='debug')
         # Neither executable creates a child: Python is the external orchestrator.
+        # Reproduce crash leftovers at both production listener entry points.
+        for name in ('vtest', 'render'):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+                stale.bind(str(runtime/name))
         with (logs/'compositor.log').open('w') as cl, (logs/'server.log').open('w') as sl:
             compositor = subprocess.Popen([str(ROOT/'build/host/compositor/ps5wl'), '-b','headless','-d',env['WAYLAND_DISPLAY']], env=env, stdout=cl, stderr=cl)
             host_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_lvp.so'))
@@ -136,6 +147,9 @@ def main():
             raise RuntimeError(f'server={server.returncode} compositor={compositor.returncode}')
         for marker in ['host-pointer blob:', 'Vulkan fd-export calls=0']:
             if marker not in server_text: raise RuntimeError('missing server evidence '+marker)
+        for name in ('vtest', 'render'):
+            if f'removed refused stale socket path={runtime/name}' not in server_text:
+                raise RuntimeError('missing stale listener recovery '+name)
         if a.sync_trace:
             key = r'ctx=(\d+) ring=([1-9]\d*) fence=(\d+)'
             submitted = set(re.findall(r'sync-trace submit-begin '+key, server_text))

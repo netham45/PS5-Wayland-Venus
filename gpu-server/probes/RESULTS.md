@@ -1162,3 +1162,65 @@ This proves that lifetime change removed the reproduced startup regression.
 It does not by itself prove which native libc call faulted, G4 rendering or
 the final refreshed installation. Venus/RADV/lavapipe are being relinked
 against this final archive before further Vulkan console use.
+
+### Refused stale GPU endpoints — reproduced and fixed centrally
+
+The retained-module Venus attempt (`g4-retained-*.log`, foreground153,
+client155) did not reach WSI: gpud startup returned `-48` (EADDRINUSE),
+then the client enumerated zero devices. Payload157 established that both
+`/system_tmp/ps5wl-gpu-0` and `/system_tmp/ps5wl-gpu-lkl` were socket files
+whose correctly typed connect returned ECONNREFUSED61; it removed both.
+Evidence: `stale-gpu-cleanup-{before,run,client,after}.log`.
+
+The same source failure was reproduced host-first using the existing sanitized
+`gpud-host`: pre-created bound-and-closed vtest/render sockets caused
+`gpud start: -98` and exit1. `core/unix_listener.c` now handles only
+EADDRINUSE followed by a matching-transport ECONNREFUSED: it verifies a socket
+entry and unchanged inode/device, unlinks, logs, and retries bind once.
+Live listeners, full backlogs, other connect errors and regular files are not
+removed. Both vtest and render startup use this helper. The host suite now
+preseeds both stale production endpoints and requires their recovery log lines;
+the native regression covers stale/live stream and seqpacket sockets plus a
+regular-file collision.
+
+The rebuilt sanitized host suite passed after stale recovery:
+`env/run gpu-server/tests/vtest-cube --sanitize --full-hd --sync-trace`
+reported600 presents, concurrent clients and killed-client SHM baseline,
+including the new stream/seqpacket/native listener regression and both real
+startup recovery logs. Combined server/compositor build command bg350 exited0
+in105.18s. Rebuilt PS5 gpud, bounded60s and normal0s power-enabled compositor
+links also succeeded.
+
+### Post-stale-recovery console gates — two new source failures
+
+`g4-stale-safe-*.log`: foreground159 started gpud with `result=0`; client161
+selected the Venus RADV device, then asserted in the initial surface-format
+query before any presents. It exited before the8s cleanup; no kill was sent to
+another PID. The compositor survived all60s, drained gpud with result0 and
+cleanly exited through the diagnostic driver. Final process snapshot contains
+only keepalive138 among owned payloads.
+
+After adding exact query-result diagnostics and optional Wayland client tracing,
+the host full-HD sanitized suite passed again (bg351,98.71s, artifact://1186).
+`g4-formats-trace-*.log`, foreground169/client171, reports
+`vkGetPhysicalDeviceSurfaceFormatsKHR result=-1000000000` (SURFACE_LOST),
+`Wayland display error=0`. The root client registry received wl_shm and xdg
+globals. The compositor again survived its full timer and exited cleanly.
+No cube frames/PNG are claimed. Venus initialization tracing is used to locate
+the failing WSI display-initialization path before further cure attempts.
+
+`l5-final-loader-*.log`: foreground164/client166 used the requested driver
+SHA256 `6f8c410d989f7c54df3c3feebfe33dc6bdf01cdea2e9aef380035fe30332707a`.
+It passed the original loader failure, then faulted with RIP0 during MCJIT
+RX finalization. Saved stack top returns to driver+0xf4b2; disassembly proves
+this is `mprotect` calling its unbound weak `kernel_mprotect` GOT slot.
+`l5-final-loader-symbolized.log` records the chain through LLVM mapped-memory
+protection, SectionMemoryManager, MCJIT, llvmpipe sampler JIT and lvp_CreateDevice.
+The source fix adds SDK public `mmap`/`mprotect` to the canonical DSO binding
+list, using the payload's initialized wrappers rather than exporting private
+hooks or bypassing executable-page protection. Both public functions were
+observed exported in the actual client ELF. The rebuilt driver necessarily
+supersedes the requested old hash; its acceptance remains a separate gate.
+Client166 exited after its full extended fault capture; the compositor again
+completed60s and clean teardown. All before/after console checks remained
+responsive; keepalive138 was left running.

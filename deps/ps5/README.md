@@ -46,10 +46,14 @@ introduced. The native regression is `cross/test-fd-compat.sh`; console probe
 regressions verify actual SHM identity and cross-process mapping coherence.
 
 Shared-library links also receive `cross/public-loader.dyn`, the canonical
-five-symbol exception (`dlopen`, `dlsym`, `dladdr`, `dlclose`, `dlerror`) to
-`-Bsymbolic`. These public loader calls must resolve through the payload's
-initialized loader, not a DSO-local SDK wrapper whose weak `__dl*` hooks are
-unbound. Keep the remainder of `-Bsymbolic` intact. Build-system link fingerprints
+exception list for `-Bsymbolic`: `dlopen`, `dlsym`, `dladdr`, `dlclose`,
+`dlerror`, `mmap` and `mprotect`. Public loader calls must resolve through the
+payload's initialized loader, not DSO-local SDK wrappers with unbound weak
+`__dl*` hooks. Executable mappings/protection likewise need the payload's SDK
+wrapper: DSO-local `mmap`/`mprotect` call an unbound weak `kernel_mprotect`
+hook when PROT_EXEC is requested. The payload exports both public entrypoints;
+no private CRT hooks are exported. Keep other symbolic bindings intact.
+Build-system link fingerprints
 must include the compiler proxy, compatibility archive and this list's contents;
 changing injected link inputs alone is not visible to an existing Ninja graph.
 

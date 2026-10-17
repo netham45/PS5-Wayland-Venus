@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "vtest.h"
 #include "gpud_core.h"
+#include "unix_listener.h"
 #include "vtest_protocol.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -348,8 +349,7 @@ int gpud_vtest_start(const char *path)
     if (listener < 0) return -errno;
     fcntl(listener, F_SETFD, FD_CLOEXEC);
     fcntl(listener, F_SETFL, O_NONBLOCK);
-    struct sockaddr_un addr = {.sun_family = AF_UNIX}; strcpy(addr.sun_path, path);
-    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) || listen(listener, 32)) {
+    if (gpud_unix_bind(listener, path, SOCK_STREAM) || listen(listener, 32)) {
         int error = errno; close(listener); listener = -1; return -error;
     }
     if (pipe(listener_wake)) {

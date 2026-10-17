@@ -219,6 +219,10 @@ in `deps/mesa/README.md`. For the matching server, `gpu-server/tests/vtest-cube
 be submitted, successfully waited, and retired through the vtest callback,
 plus completed WSI fence/present stages and wait-pipe signaling. Add `--full-hd`
 for the existing 600-frame 1920×1080 and killed/concurrent-client coverage.
+The traced client also enables `WAYLAND_DEBUG=client`; on an assertion its
+existing bounded stderr snapshot includes recent protocol traffic. Surface
+format-query failures log the exact VkResult and Wayland display error before
+the original assertion, rather than discarding the failing result.
 
 `build.sh ps5 --driver lavapipe --fault-trace` additionally builds a diagnostic
 client with frame pointers and a pre-created fault collector. Before Vulkan

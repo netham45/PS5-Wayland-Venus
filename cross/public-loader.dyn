@@ -4,4 +4,6 @@
     dladdr;
     dlclose;
     dlerror;
+    mmap;
+    mprotect;
 };

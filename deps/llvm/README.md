@@ -186,6 +186,19 @@ process lifetime. Post-link inspection confirms its resolver calls `dlopen` and
 `dlsym` without `dlclose`; loader bindings, C11 targets and Wayland's wrapper
 callsite remain intact. The symbolized evidence log records the final hashes.
 
+The final-loader console run (`build/ps5/evidence/gpu/l5-final-loader-client.log`,
+PID166) progressed to MCJIT memory finalization, then captured RIP0. The stack
+return at driver+0xf4b2 is the SDK `mprotect` wrapper's call through its weak,
+unbound `kernel_mprotect` GOT slot. The frame chain continues through
+`llvm::sys::Memory::protectMappedMemory`, `SectionMemoryManager::finalizeMemory`,
+MCJIT, and sampler JIT initialization. The analogous SDK `mmap(PROT_EXEC)`
+branch uses the same private hook. The canonical public binding list therefore
+includes both `mmap` and `mprotect`, already exported by the payload, while
+preserving the SDK's existing privileged executable-page implementation.
+No raw-syscall permission bypass or private-hook export was added. This
+supersedes the prior driver hash; console acceptance of the rebuilt driver is
+recorded separately in the GPU probe results.
+
 No 600-present or screenshot acceptance is claimed. Every additional console
 run requires explicit authorization and coordination with the console owner.
 For a full acceptance run, allow enough compositor lifetime for 600 CPU-rendered
