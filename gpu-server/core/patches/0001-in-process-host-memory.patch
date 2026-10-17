@@ -1,0 +1,399 @@
+--- a/src/mesa/compat/c11/threads.h
++++ b/src/mesa/compat/c11/threads.h
+@@ -28,6 +28,10 @@
+  */
+ #ifndef EMULATED_THREADS_H_INCLUDED_
+ #define EMULATED_THREADS_H_INCLUDED_
++#if defined(__linux__)
++#include <pthread.h>
++#include <threads.h>
++#else
+ 
+ #include <time.h>
+ 
+@@ -67,5 +71,6 @@
+ #endif
+ 
+ 
++#endif
+ 
+ #endif /* EMULATED_THREADS_H_INCLUDED_ */
+--- a/src/venus/vkr_library.c
++++ b/src/venus/vkr_library.c
+@@ -41,8 +41,9 @@
+    if (lib->handle)
+       return true;
+ 
+-   lib->handle = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+-   if (lib->handle == NULL)
++   const char *path = getenv("PS5WL_VULKAN_LIBRARY");
++   lib->handle = dlopen(path ? path : "libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
++   if (lib->handle == NULL && !path)
+       lib->handle = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (lib->handle == NULL) {
+       vkr_log("failed to open libvulkan: %s", dlerror());
+@@ -57,6 +58,11 @@
+    /* ISO C forbids conversion of object pointer to function pointer type */
+    lib->GetInstanceProcAddr =
+       (PFN_vkGetInstanceProcAddr)dlsym(lib->handle, "vkGetInstanceProcAddr");
++   if (!lib->GetInstanceProcAddr) {
++      dlerror();
++      lib->GetInstanceProcAddr =
++         (PFN_vkGetInstanceProcAddr)dlsym(lib->handle, "vk_icdGetInstanceProcAddr");
++   }
+ #pragma GCC diagnostic pop
+ 
+    char *error = dlerror();
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -10,6 +10,87 @@
+ #include "vkr_device_memory_gen.h"
+ #include "vkr_physical_device.h"
+ 
++
++#include "util/anon_file.h"
++#include <sys/mman.h>
++#include <unistd.h>
++
++static void
++vkr_shmem_release(int fd, void *ptr, uint64_t size)
++{
++   if (ptr)
++      munmap(ptr, size);
++   if (fd >= 0)
++      close(fd);
++}
++
++static VkResult
++vkr_shmem_import(struct vkr_device *dev, VkMemoryAllocateInfo *info,
++                  VkImportMemoryHostPointerInfoEXT *import, int *fd, void **ptr,
++                  uint64_t *size)
++{
++   struct vkr_physical_device *physical = dev->physical_device;
++   uint64_t alignment = MAX2(physical->min_imported_host_pointer_alignment,
++                             MAX2(UINT64_C(16384), (uint64_t)getpagesize()));
++   if (!alignment || (alignment & (alignment - 1)) || alignment > SIZE_MAX / 2 ||
++       info->allocationSize > SIZE_MAX - alignment * 2)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   *size = (info->allocationSize + alignment - 1) & ~(alignment - 1);
++   *fd = os_create_anonymous_file(*size, "vkr-host-memory");
++   if (*fd < 0)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   /* Reserve then replace only our own address space to meet host-import alignment. */
++   void *reserve = mmap(NULL, *size + alignment, PROT_NONE,
++                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++   if (reserve == MAP_FAILED) {
++      vkr_shmem_release(*fd, NULL, 0);
++      *fd = -1;
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++   uintptr_t base = (uintptr_t)reserve;
++   uintptr_t aligned = (base + alignment - 1) & ~(alignment - 1);
++   void *mapping = mmap((void *)aligned, *size, PROT_READ | PROT_WRITE,
++                        MAP_SHARED | MAP_FIXED, *fd, 0);
++   if (mapping == MAP_FAILED) {
++      munmap(reserve, *size + alignment);
++      vkr_shmem_release(*fd, NULL, 0);
++      *fd = -1;
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   }
++   if (aligned > base)
++      munmap(reserve, aligned - base);
++   if (base + *size + alignment > aligned + *size)
++      munmap((void *)(aligned + *size), base + alignment - aligned);
++   *ptr = mapping;
++
++   PFN_vkGetMemoryHostPointerPropertiesEXT get_props =
++      (PFN_vkGetMemoryHostPointerPropertiesEXT)physical->proc_table.GetDeviceProcAddr(
++         dev->base.handle.device, "vkGetMemoryHostPointerPropertiesEXT");
++   VkMemoryHostPointerPropertiesEXT props = {
++      .sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT,
++   };
++   VkResult result = get_props ? get_props(dev->base.handle.device,
++      VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, *ptr, &props) :
++      VK_ERROR_EXTENSION_NOT_PRESENT;
++   if (result == VK_SUCCESS && !(props.memoryTypeBits & (1u << info->memoryTypeIndex)))
++      result = VK_ERROR_OUT_OF_HOST_MEMORY;
++   if (result != VK_SUCCESS) {
++      vkr_shmem_release(*fd, *ptr, *size);
++      *fd = -1;
++      *ptr = NULL;
++      return result;
++   }
++   *import = (VkImportMemoryHostPointerInfoEXT){
++      .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
++      .pNext = info->pNext,
++      .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
++      .pHostPointer = *ptr,
++   };
++   info->pNext = import;
++   info->allocationSize = *size;
++   return VK_SUCCESS;
++}
+ static bool
+ vkr_get_fd_info_from_resource_info(struct vkr_context *ctx,
+                                    const VkImportMemoryResourceInfoMESA *res_info,
+@@ -280,84 +361,19 @@
+    uint32_t valid_fd_types = 0;
+    int udmabuf_fd = -1;
+    void *gbm_bo = NULL;
+-   VkExportMemoryAllocateInfo local_export_info;
+-   if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info) {
+-      /* An implementation can support dma_buf import along with opaque fd export/import.
+-       * If the client driver is using external memory and requesting dma_buf, without
+-       * dma_buf fd export support, we must use gbm bo import path instead of forcing
+-       * opaque fd export. e.g. the client driver uses external memory for wsi image.
+-       */
+-      const bool no_dma_buf_export =
+-         !export_info ||
+-         !(export_info->handleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+-      const bool force_udmabuf_import = physical_dev->udmabuf_dev_fd >= 0;
+-      if (!force_udmabuf_import &&
+-          (physical_dev->is_dma_buf_fd_export_supported ||
+-           (physical_dev->is_opaque_fd_export_supported && no_dma_buf_export))) {
+-         const VkExternalMemoryHandleTypeFlagBits handle_type =
+-            physical_dev->is_dma_buf_fd_export_supported
+-               ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
+-               : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+-         if (export_info) {
+-            export_info->handleTypes |= handle_type;
+-         } else {
+-            local_export_info = (const VkExportMemoryAllocateInfo){
+-               .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+-               .pNext = alloc_info->pNext,
+-               .handleTypes = handle_type,
+-            };
+-            export_info = &local_export_info;
+-            alloc_info->pNext = &local_export_info;
+-
+-            if (handle_type == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT &&
+-                !vkr_find_struct(alloc_info->pNext,
+-                                 VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO)) {
+-               /* Guest virtgpu kernel aligns up blob mem size to the page boundary. No
+-                * matter dma-buf or opaque fd export allocation, the actual allocation
+-                * in most cases would follow the same padding. For dma-buf, we are able
+-                * to allocate and validate via lseek below. For opaque fd, Vulkan spec
+-                * requires to use the same size with allocation time for the mapper,
+-                * either vkr_allocator or vulkano, to import and populate the mapping.
+-                * Accessible mapping given by vkMapMemory is normally limited to just the
+-                * alloc size. When KVM register the mappings to guest pci bar, that
+-                * involves an invalid chunk towards the end of the page boundary. As a
+-                * result, any guest side accelerated instructions that rely on the
+-                * paddings can end up with Illegal instruction error. The most common
+-                * trigger is via memcpy'ing valid range to the guest side mapped buffer
+-                * memory, and then, e.g. __memcpy_avx_unaligned_erms  can hit the error.
+-                */
+-               alloc_info->allocationSize =
+-                  align(alloc_info->allocationSize, getpagesize());
+-            }
+-         }
+-      } else if (physical_dev->EXT_external_memory_dma_buf) {
+-         /* Allocate dma_buf externally and force to import. */
+-         if (export_info) {
+-            /* Strip export info since valid_fd_types can only be dma_buf here. */
+-            VkBaseInStructure *prev_of_export_info = vkr_find_prev_struct(
+-               alloc_info, VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO);
+-
+-            prev_of_export_info->pNext = export_info->pNext;
+-            export_info = NULL;
+-         }
+-
+-         if (force_udmabuf_import) {
+-            /* To be noted, there are 2 limits for udmabuf:
+-             * - list_limit: udmabuf_create_list->count limit. Default is 1024.
+-             * - size_limit_mb: Max size of a dmabuf, in megabytes. Default is 64.
+-             */
+-            args->ret = vkr_udmabuf_get_fd_info_from_allocation_info(
+-               physical_dev, alloc_info, &udmabuf_fd, &local_import_info);
+-         } else {
+-            args->ret = vkr_gbm_get_fd_info_from_allocation_info(
+-               physical_dev, alloc_info, &gbm_bo, &local_import_info);
+-         }
+-         if (args->ret != VK_SUCCESS)
+-            return;
+-
+-         alloc_info->pNext = &local_import_info;
+-         valid_fd_types = 1 << VIRGL_RESOURCE_FD_DMABUF;
+-      }
++   int shmem_fd = -1;
++   void *shmem_ptr = NULL;
++   uint64_t shmem_size = 0;
++   VkImportMemoryHostPointerInfoEXT host_import;
++   if (export_info || res_info) {
++      args->ret = VK_ERROR_OUT_OF_DEVICE_MEMORY;
++      return;
++   }
++   if (property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
++      args->ret = vkr_shmem_import(dev, alloc_info, &host_import,
++                                   &shmem_fd, &shmem_ptr, &shmem_size);
++      if (args->ret != VK_SUCCESS)
++         return;
+    }
+ 
+    if (export_info) {
+@@ -373,6 +389,7 @@
+          close(local_import_info.fd);
+       if (gbm_bo)
+          vkr_gbm_bo_destroy(gbm_bo);
++      vkr_shmem_release(shmem_fd, shmem_ptr, shmem_size);
+       return;
+    }
+ 
+@@ -382,6 +399,9 @@
+    mem->valid_fd_types = valid_fd_types;
+    mem->udmabuf_fd = udmabuf_fd;
+    mem->gbm_bo = gbm_bo;
++   mem->shmem_fd = shmem_fd;
++   mem->shmem_ptr = shmem_ptr;
++   mem->shmem_size = shmem_size;
+    mem->allocation_size = alloc_info->allocationSize;
+    mem->memory_type_index = mem_type_index;
+ }
+@@ -395,8 +415,10 @@
+    if (!mem)
+       return;
+ 
++   struct vkr_device *dev = mem->device;
++   vkr_device_memory_destroy_driver_handle(dispatch->data, args);
+    vkr_device_memory_release(mem);
+-   vkr_device_memory_destroy_and_remove(dispatch->data, args);
++   vkr_device_remove_object(dispatch->data, dev, &mem->base);
+ }
+ 
+ static void
+@@ -494,6 +516,7 @@
+       vkr_gbm_bo_destroy(mem->gbm_bo);
+    if (mem->udmabuf_fd >= 0)
+       close(mem->udmabuf_fd);
++   vkr_shmem_release(mem->shmem_fd, mem->shmem_ptr, mem->shmem_size);
+ }
+ 
+ bool
+@@ -525,6 +548,25 @@
+       /* XXX guessed */
+       map_info = (coherent && cached) ? VIRGL_RENDERER_MAP_CACHE_CACHED
+                                       : VIRGL_RENDERER_MAP_CACHE_WC;
++   }
++
++   if (mem->shmem_ptr) {
++      if ((blob_flags & (VIRGL_RENDERER_BLOB_FLAG_USE_SHAREABLE |
++                        VIRGL_RENDERER_BLOB_FLAG_USE_CROSS_DEVICE)) ||
++          blob_size > mem->shmem_size)
++         return false;
++      int fd = os_dupfd_cloexec(mem->shmem_fd);
++      if (fd < 0)
++         return false;
++      *out_blob = (struct virgl_context_blob){
++         .type = VIRGL_RESOURCE_FD_SHM,
++         .u.fd = fd,
++         .map_info = map_info,
++      };
++      mem->exported = true;
++      vkr_log("host-pointer blob: size=%" PRIu64 " (ordinary SHM fd; no Vulkan fd export)",
++              blob_size);
++      return true;
+    }
+ 
+    const bool can_export_dma_buf = mem->valid_fd_types & (1 << VIRGL_RESOURCE_FD_DMABUF);
+--- a/src/venus/vkr_device_memory.h
++++ b/src/venus/vkr_device_memory.h
+@@ -26,6 +26,11 @@
+    /* udmabuf backing non-external mappable memory */
+    int udmabuf_fd;
+ 
++   /* Server-owned ordinary shared pages imported through external_memory_host. */
++   int shmem_fd;
++   void *shmem_ptr;
++   uint64_t shmem_size;
++
+    uint64_t allocation_size;
+    uint32_t memory_type_index;
+ 
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -10,6 +10,8 @@
+ #include "vkr_context.h"
+ #include "vkr_device.h"
+ #include "vkr_instance.h"
++#include "gpud_host_memory.h"
++ 
+ 
+ #ifdef HAVE_LINUX_UDMABUF_H
+ #include <fcntl.h>
+@@ -170,6 +172,8 @@
+ 
+    VkPhysicalDevice handle = physical_dev->base.handle.physical_device;
+    vk->GetPhysicalDeviceMemoryProperties(handle, &physical_dev->memory_properties);
++   gpud_mask_memory_types(&physical_dev->memory_properties,
++                         gpud_query_host_types(physical_dev));
+ 
+    /* XXX When a VkMemoryType has VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, we
+     * assume any VkDeviceMemory with the memory type can be made external and
+@@ -273,6 +277,8 @@
+          physical_dev->KHR_external_memory_fd = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_external_memory_dma_buf"))
+          physical_dev->EXT_external_memory_dma_buf = true;
++      else if (!strcmp(props->extensionName, "VK_EXT_external_memory_host"))
++         physical_dev->EXT_external_memory_host = true;
+       else if (!strcmp(props->extensionName, "VK_KHR_external_fence_fd"))
+          physical_dev->KHR_external_fence_fd = true;
+ 
+@@ -296,6 +302,19 @@
+ 
+       if (!(fence_props.externalFenceFeatures & VK_EXTERNAL_FENCE_FEATURE_EXPORTABLE_BIT))
+          physical_dev->KHR_external_fence_fd = false;
++   }
++
++   if (physical_dev->EXT_external_memory_host) {
++      VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {
++         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT,
++      };
++      VkPhysicalDeviceProperties2 props = {
++         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++         .pNext = &host,
++      };
++      vk->GetPhysicalDeviceProperties2(handle, &props);
++      physical_dev->min_imported_host_pointer_alignment =
++         host.minImportedHostPointerAlignment;
+    }
+ 
+    physical_dev->extensions = realloc(exts, sizeof(*exts) * advertised_count);
+@@ -686,6 +705,7 @@
+       vn_replace_vkGetPhysicalDeviceMemoryProperties2_args_handle(args);
+       vk->GetPhysicalDeviceMemoryProperties2(args->physicalDevice,
+                                              args->pMemoryProperties);
++      args->pMemoryProperties->memoryProperties = physical_dev->memory_properties;
+    }
+ }
+ 
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -23,6 +23,8 @@
+ 
+    bool KHR_external_memory_fd;
+    bool EXT_external_memory_dma_buf;
++   bool EXT_external_memory_host;
++   VkDeviceSize min_imported_host_pointer_alignment;
+ 
+    bool KHR_external_fence_fd;
+    bool KHR_external_semaphore_fd;
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -133,6 +133,7 @@
+    ext_count += physical_dev->KHR_external_memory_fd;
+    ext_count += physical_dev->EXT_external_memory_dma_buf;
+    ext_count += physical_dev->KHR_external_fence_fd;
++   ext_count += physical_dev->EXT_external_memory_host;
+    if (ext_count > args->pCreateInfo->enabledExtensionCount) {
+       exts = malloc(sizeof(*exts) * ext_count);
+       if (!exts) {
+@@ -149,6 +150,8 @@
+          exts[ext_count++] = "VK_EXT_external_memory_dma_buf";
+       if (physical_dev->KHR_external_fence_fd)
+          exts[ext_count++] = "VK_KHR_external_fence_fd";
++      if (physical_dev->EXT_external_memory_host)
++         exts[ext_count++] = "VK_EXT_external_memory_host";
+ 
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->ppEnabledExtensionNames = exts;
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->enabledExtensionCount = ext_count;

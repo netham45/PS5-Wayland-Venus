@@ -24,6 +24,40 @@ lavapipe ICD directly (not a host distro Vulkan loader), renders 120 cube
 frames through Wayland WSI, and requires the completed frame counter. It
 terminates its own compositor in `finally` and propagates either exit status.
 
+## Driver variants
+
+`build.sh host|ps5 --driver venus` builds the same cube and readback test with
+the Venus library selected by default. Outputs are isolated from native RADV:
+
+| Target | Cube | Readback |
+| --- | --- | --- |
+| Host | `build/host/vkcube-venus/ps5wl-vkcube-venus` | `build/host/vkcube-venus/ps5wl-vktest-venus` |
+| PS5 | `build/ps5/vkcube-venus/ps5wl-vkcube-venus.elf` | `build/ps5/vkcube-venus/ps5wl-vktest-venus.elf` |
+
+Build Mesa first using `deps/mesa/build.sh host|ps5 --driver venus`.
+The host runtime defaults to `build/host/venus/lib/libvulkan_virtio.so`;
+the PS5 payload embeds and atomically installs
+`/data/ps5wl/libvulkan-venus.so.1`, separate from the compositor's RADV.
+`PS5WL_VULKAN_LIBRARY` still overrides runtime library discovery.
+Venus defaults `VTEST_SOCKET_NAME` to `/system_tmp/ps5wl-gpu-0`; host tests
+must override it with their private GPU server socket. The readback test
+initialises this transport even though it does not initialise Wayland.
+These are vtest clients: neither requires a client GPU/direct-memory budget.
+The PS5 driver and payload links retain the common fd wrappers and assert
+diagnostics. Log ports remain 9590 (cube) and 9591 (readback), so different
+driver variants must not run their same test simultaneously on the console.
+
+`--driver lavapipe` uses the independent CPU fallback installed by
+`deps/mesa/build.sh host|ps5 --driver lavapipe`, with analogous
+`vkcube-lavapipe/ps5wl-{vkcube,vktest}-lavapipe[.elf]` outputs and the
+PS5 extraction path `/data/ps5wl/libvulkan-lavapipe.so.1`. No GPU server is
+needed for that variant. The host presentation harness accepts
+`env/run python3 clients/vkcube/smoke.py --driver lavapipe`; Venus can use
+`--driver venus` with an already running private GPU server named by
+`VTEST_SOCKET_NAME`. Both harness variants require 120 client presents and
+120 compositor wl_shm commits, not just Vulkan instance creation.
+
+
 ## Console sequence
 
 Start the compositor through its foreground BigApp launcher and wait for its
@@ -123,3 +157,28 @@ not evidence of a working interactive Vulkan window or of an exhausted
 global pool: the available-range query already failed in this client before
 Vulkan initialization. No budget syscall, heap-size override or image-count
 reduction was attempted.
+
+## Venus offline build evidence
+
+`env/run deps/mesa/build.sh host --driver venus` completed 878 build steps,
+installed Venus and the constrained lavapipe stand-in, and exited 0.
+`env/run deps/mesa/build.sh ps5 --driver venus` completed 260 build steps,
+installed `build/ps5/venus/lib/libvulkan-venus.so.1`, and exited 0.
+Both `clients/vkcube/build.sh host|ps5 --driver venus` invocations exited 0.
+The PS5 driver and both payload links select `cross/bin/prospero-clang`.
+Generated Venus protocol headers emit Clang uninitialised-const-pointer
+warnings; neither warnings nor errors were suppressed.
+
+Host ICD extension enumeration with `PS5WL_NO_EXTERNAL_FD=false` found
+184 extensions, including external memory/fence/semaphore fd extensions.
+With `PS5WL_NO_EXTERNAL_FD=true` it found 180 and none of the five masked
+extensions; `VK_EXT_external_memory_host` remained present in both cases.
+The host check needs `LD_LIBRARY_PATH=$PWD/build/host/sysroot/lib`.
+
+`llvm-nm -D --defined-only` found 259 exported `vk*` symbols in the PS5 Venus
+library, including `vkCreateInstance`, both proc-address functions,
+`vkCreateDevice`, `vkQueueSubmit` and `vkCreateSwapchainKHR`.
+`llvm-nm --defined-only` found `__wrap_fcntl` and `__wrap_shm_open` in the
+PS5 driver and both Venus ELFs. The compiled driver contains the default
+`/system_tmp/ps5wl-gpu-0` string. These checks establish build/ABI and masking
+only; they are not a Venus rendering or console-execution result.

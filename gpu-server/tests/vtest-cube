@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""G1: in-process vkr threads, no-fd lavapipe, Venus Wayland shm presentation."""
+import argparse
+import os
+from pathlib import Path
+import signal
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+
+def ready(path, process):
+    end = time.monotonic() + 20
+    while not path.exists():
+        if process.poll() is not None or time.monotonic() > end:
+            raise RuntimeError(f'{path}: server did not become ready')
+        time.sleep(.02)
+
+def stop(p):
+    if p.poll() is None:
+        p.terminate()
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        p.kill(); p.wait(); raise
+
+def counts(pid):
+    proc = Path('/proc') / str(pid)
+    fds = list((proc/'fd').iterdir())
+    shm_fds = sum('vkr' in os.readlink(f) or 'virgl' in os.readlink(f) for f in fds)
+    maps = [x for x in (proc/'maps').read_text().splitlines() if 'vkr' in x or 'virgl' in x]
+    return shm_fds, len(maps)
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sanitize', action='store_true')
+    a = parser.parse_args()
+    if os.environ.get('PS5WL_BUILD_ENV') != '1':
+        parser.error('run inside env/run')
+    build = ROOT/'build/gpud'/('host-sanitize' if a.sanitize else 'host')
+    logs = ROOT/'build/gpud/logs'/('sanitize' if a.sanitize else 'host')
+    logs.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(build/'memory-mask')], check=True)
+    with tempfile.TemporaryDirectory(prefix='gpud-', dir=ROOT/'build') as temp:
+        runtime = Path(temp)
+        env = dict(os.environ, XDG_RUNTIME_DIR=temp, WAYLAND_DISPLAY='gpud-wayland',
+                   WLR_RENDERER='pixman', VN_DEBUG='vtest',
+                   VTEST_SOCKET_NAME=str(runtime/'vtest'),
+                   XKB_CONFIG_ROOT=str(ROOT/'build/host/sysroot/share/xkeyboard-config-2'),
+                   LD_LIBRARY_PATH=str(ROOT/'build/host/sysroot/lib'),
+                   PS5WL_NO_EXTERNAL_FD='true', ASAN_OPTIONS='abort_on_error=1:detect_leaks=1',
+                   UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+        # Neither executable creates a child: Python is the external orchestrator.
+        with (logs/'compositor.log').open('w') as cl, (logs/'server.log').open('w') as sl:
+            compositor = subprocess.Popen([str(ROOT/'build/host/compositor/ps5wl'), '-b','headless','-d',env['WAYLAND_DISPLAY']], env=env, stdout=cl, stderr=cl)
+            host_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_lvp.so'))
+            server = subprocess.Popen([str(build/'gpud-host'), str(runtime/'vtest'), str(runtime/'render')], env=host_env, stdout=sl, stderr=sl)
+            children = []
+            try:
+                ready(runtime/env['WAYLAND_DISPLAY'], compositor)
+                ready(runtime/'vtest', server)
+                client_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_virtio.so'))
+                cube = ROOT/'build/host/vkcube-venus/ps5wl-vkcube-venus'
+                def launch(name, frames):
+                    out = (logs/(name+'.log')).open('w')
+                    p = subprocess.Popen([str(cube),'--wsi','wayland','--c',str(frames)], env=client_env, stdout=out, stderr=out)
+                    out.close(); children.append(p); return p
+                def passed(p, name):
+                    code = p.wait(timeout=120)
+                    text = (logs/(name+'.log')).read_text()
+                    if code or 'vkcube presented frame=120' not in text or 'vkcube exit frames=120 validation_error=0' not in text:
+                        raise RuntimeError(f'{name}: exit={code}; see {logs}')
+                passed(launch('single',120),'single')
+                time.sleep(.2)
+                baseline = counts(server.pid)
+                victim = launch('killed',1000000)
+                deadline = time.monotonic() + 30
+                while 'vkcube presented frame=1' not in (logs/'killed.log').read_text():
+                    if victim.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError('kill client failed before first frame')
+                    time.sleep(.02)
+                active = counts(server.pid)
+                victim.kill(); victim.wait()
+                deadline = time.monotonic() + 5
+                after = counts(server.pid)
+                while after != baseline and time.monotonic() < deadline:
+                    time.sleep(.02); after = counts(server.pid)
+                if active[1] <= baseline[1] or after != baseline:
+                    raise RuntimeError(f'SHM cleanup failed baseline={baseline} active={active} after={after}')
+                (logs/'cleanup.log').write_text(f'SHM fd,mapping baseline={baseline} active={active} after-kill={after}\n')
+                one, two = launch('concurrent-1',120), launch('concurrent-2',120)
+                passed(one,'concurrent-1'); passed(two,'concurrent-2')
+            finally:
+                for p in children:
+                    if p.poll() is None: p.kill(); p.wait()
+                stop(server); stop(compositor)
+        server_text = (logs/'server.log').read_text()
+        compositor_text = (logs/'compositor.log').read_text()
+        if server.returncode or compositor.returncode:
+            raise RuntimeError(f'server={server.returncode} compositor={compositor.returncode}')
+        for marker in ['host-pointer blob:', 'Vulkan fd-export calls=0']:
+            if marker not in server_text: raise RuntimeError('missing server evidence '+marker)
+        if 'Created shm allocator' not in compositor_text or 'count=120' not in compositor_text:
+            raise RuntimeError('missing 120 compositor wl_shm commits')
+        for path in logs.glob('*.log'):
+            text = path.read_text()
+            if 'ERROR: AddressSanitizer' in text or 'runtime error:' in text or 'LeakSanitizer' in text:
+                raise RuntimeError('sanitizer failure '+str(path))
+        print(f'PASS: 120 Venus shm frames; killed-client SHM baseline; concurrent clients; logs={logs}')
+
+if __name__ == '__main__':
+    main()

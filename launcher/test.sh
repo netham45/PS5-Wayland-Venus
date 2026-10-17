@@ -3,17 +3,54 @@
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 MODE=${1:-compositor}
-if [[ "$MODE" == --elf && $# -eq 2 ]]; then
+if [[ ( "$MODE" == --elf || "$MODE" == --diagnostic-elf ) && $# -eq 2 ]]; then
     PAYLOAD=$(realpath -- "$2")
     if [[ ! -f "$PAYLOAD" ]]; then
         echo "Missing payload: $PAYLOAD" >&2
         exit 1
     fi
 elif [[ $# -gt 1 || ( "$MODE" != compositor && "$MODE" != --probe ) ]]; then
-    echo "Usage: $0 [compositor|--probe|--elf BOUNDED_COMPOSITOR_ELF]" >&2
+    echo "Usage: $0 [compositor|--probe|--elf BOUNDED_COMPOSITOR_ELF|--diagnostic-elf BOUNDED_DIAGNOSTIC_ELF]" >&2
     exit 2
 fi
 processes=$("$ROOT/tools/ps5ctl" ps)
+if [[ "$MODE" == --diagnostic-elf ]]; then
+    case "$processes" in
+        *ps5wl-uninstall.elf*|*ps5wl-launch-probe*|*ps5wl-launch-diag*)
+            echo "Existing cleanup/probe/diagnostic process detected; coordinator cleanup is required." >&2
+            exit 1
+            ;;
+    esac
+    # Build only the isolated driver; never rebuild/install assets or signal the resident installer.
+    "$ROOT/env/run" make -C "$ROOT/launcher" ps5wl-launch-diag.elf DIAGNOSTIC="$PAYLOAD"
+    "$ROOT/tools/ps5ctl" run "$ROOT/launcher/ps5wl-launch-diag.elf"
+    driver_log=$(mktemp)
+    timeout 95 "$ROOT/tools/ps5ctl" logs --port 9586 --retry 15 > "$driver_log" &
+    observer=$!
+    cleanup_diagnostic() {
+        if [[ -n "${observer:-}" ]]; then
+            kill "$observer" 2>/dev/null || true
+            wait "$observer" 2>/dev/null || true
+        fi
+        rm -f -- "$driver_log"
+    }
+    trap cleanup_diagnostic EXIT
+    set +e
+    timeout 75 "$ROOT/tools/ps5ctl" logs --port 9530 --retry 30
+    result=$?
+    wait "$observer"
+    driver_result=$?
+    observer=
+    set -e
+    cat "$driver_log"
+    if [[ "$result" != 0 || "$driver_result" != 0 ]] ||
+        ! grep -Fq "diagnostic result=0 child=" "$driver_log"; then
+        echo "Diagnostic failed: body log status=$result driver log status=$driver_result; review results and obtain coordinator cleanup." >&2
+        exit 1
+    fi
+    echo "Diagnostic log stream closed and child disappeared; resident installation was not changed. Review native test results above."
+    exit 0
+fi
 case "$processes" in
     *ps5wl-install.elf*|*ps5wl-uninstall.elf*|*ps5wl-launch-probe*)
         echo "Existing launcher/test process detected; do not relaunch over a stuck session." >&2

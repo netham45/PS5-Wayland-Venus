@@ -1,0 +1,92 @@
+From: ps5wl contributors
+Subject: [PATCH] venus: payload exports and built-in PS5 vtest transport
+
+Reuse pacbrew loader exports, with no DRM and a separate Venus soname.
+
+--- a/meson.options
++++ b/meson.options
+@@ -1,3 +1,5 @@
++option('venus-ps5', type : 'boolean', value : false,
++       description : 'Build Venus as a PS5 payload Vulkan library over vtest')
+ # Copyright © 2017-2019 Intel Corporation
+ # SPDX-License-Identifier: MIT
+ 
+--- a/meson.build
++++ b/meson.build
+@@ -342,8 +342,12 @@
+ # RADV on the PlayStation 5 reaches the GPU through AGC, beside a FreeBSD-derived
+ # libc that has no DRM, so nothing may look for libdrm there. (A Linux host
+ # build of the same winsys keeps DRM for the rest of Mesa.)
+-if _vulkan_drivers.contains('amd') and get_option('radv-winsys') == 'ps5' and host_machine.system() != 'linux'
++with_venus_ps5 = get_option('venus-ps5')
++if with_venus_ps5 or (_vulkan_drivers.contains('amd') and get_option('radv-winsys') == 'ps5' and host_machine.system() != 'linux')
+   system_has_kms_drm = false
++endif
++if with_venus_ps5
++  pre_args += '-DC11_THREADS_RENAME'
+ endif
+ # Its one display is VideoOut (src/vulkan/wsi/wsi_common_videoout.c), in the
+ # host model's builds too, rather than a DRM connector.
+--- a/src/virtio/vulkan/vn_renderer_vtest.c
++++ b/src/virtio/vulkan/vn_renderer_vtest.c
+@@ -981,6 +981,10 @@
+ vtest_init(struct vtest *vtest)
+ {
+    const char *socket_name = os_get_option("VTEST_SOCKET_NAME");
++#ifdef PS5WL_VENUS_PS5
++   if (!socket_name)
++      socket_name = "/system_tmp/ps5wl-gpu-0";
++#endif
+ 
+    util_sparse_array_init(&vtest->shmem_array, sizeof(struct vtest_shmem),
+                           1024);
+--- a/src/virtio/vulkan/meson.build
++++ b/src/virtio/vulkan/meson.build
+@@ -28,7 +28,8 @@
+   ],
+ )
+ 
+-icd_file_name = libname_prefix + 'vulkan_virtio.' + libname_suffix
++vn_library_name = with_venus_ps5 ? 'vulkan-venus' : 'vulkan_virtio'
++icd_file_name = libname_prefix + vn_library_name + '.' + libname_suffix
+ 
+ virtio_icd = custom_target(
+   'virtio_icd',
+@@ -154,15 +155,34 @@
+   vn_deps += [dep_android, idep_u_gralloc]
+ endif
+ 
++vn_exports = []
++vn_link_depends = vulkan_icd_link_depends
++vn_version = {}
++if with_venus_ps5
++  vn_c_args += '-DPS5WL_VENUS_PS5'
++  vn_exports += custom_target(
++    'venus_vk_exports',
++    input : [vk_exports_gen, vk_api_xml],
++    output : 'vk_exports.c',
++    command : [prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--out-c', '@OUTPUT@'],
++    depend_files : vk_entrypoints_gen_depend_files,
++  )
++  vn_link_args = [ld_args_bsymbolic, ld_args_gc_sections,
++    '-Wl,--version-script,' + join_paths(meson.project_source_root(), 'src/amd/vulkan/vulkan_ps5.sym')]
++  vn_link_depends = files('../../amd/vulkan/vulkan_ps5.sym')
++  vn_version = {'soversion' : '1'}
++endif
++
+ libvulkan_virtio = shared_library(
+-  'vulkan_virtio',
+-  [libvn_files, vn_entrypoints, vn_drirc, sha1_h],
++  vn_library_name,
++  [libvn_files, vn_entrypoints, vn_drirc, sha1_h, vn_exports],
+   include_directories : vn_incs,
+   link_with : vn_libs,
+   dependencies : vn_deps,
+   c_args : vn_c_args,
+   link_args : vn_link_args,
+-  link_depends : vulkan_icd_link_depends,
++  link_depends : vn_link_depends,
+   gnu_symbol_visibility : 'hidden',
+   install : true,
++  kwargs : vn_version,
+ )

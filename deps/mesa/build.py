@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build pinned pacbrew RADV and the matching host lavapipe/WSI tools."""
+"""Build pinned pacbrew RADV, Venus payloads and host Vulkan stand-ins."""
 import argparse
 import hashlib
 import json
@@ -48,16 +48,29 @@ def source(name):
     return destination
 
 
-def prepare():
+def prepare(driver='radv'):
     recipe = source('pacbrew-mesa') / 'mesa'
     patches = sorted(recipe.glob('*.patch')) + sorted((ROOT / 'deps/mesa/patches').glob('*.patch'))
+    if driver == 'venus':
+        patches += sorted((ROOT / 'deps/mesa/venus-patches').glob('*.patch'))
     digest = hashlib.sha256(fetch('mesa').read_bytes() + b''.join(p.read_bytes() for p in patches)).hexdigest()
-    destination = BASE / 'sources' / PINS['mesa']['source_dir']
+    suffix = '-venus' if driver == 'venus' else ''
+    destination = BASE / 'sources' / (PINS['mesa']['source_dir'] + suffix)
     stamp = destination / '.ps5wl-mesa-source'
     if not stamp.exists() or stamp.read_text() != digest:
         if destination.exists():
             shutil.rmtree(destination)
-        destination = source('mesa')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if suffix:
+            with tarfile.open(fetch('mesa')) as tar:
+                members = tar.getmembers()
+                for member in members:
+                    member.name = member.name.replace(PINS['mesa']['source_dir'], destination.name, 1)
+                    if member.issym() or member.islnk():
+                        member.linkname = member.linkname.replace(PINS['mesa']['source_dir'], destination.name, 1)
+                tar.extractall(destination.parent, members=members, filter='data')
+        else:
+            destination = source('mesa')
         for patch in patches:
             run(['patch', '--batch', '-p1', '-i', patch], cwd=destination)
         stamp.write_text(digest)
@@ -77,10 +90,14 @@ def configure(name, src, options, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('target', choices=['tools', 'host', 'ps5', 'prepare'])
+    parser.add_argument('--driver', choices=['radv', 'venus', 'lavapipe'], default='radv')
     args = parser.parse_args()
     if os.environ.get('PS5WL_BUILD_ENV') != '1':
         raise SystemExit('Run through env/run deps/mesa/build.sh TARGET')
-    src, digest = prepare()
+    if args.driver == 'lavapipe':
+        run(['python3', ROOT / 'deps/mesa/lavapipe.py', args.target])
+        return
+    src, digest = prepare(args.driver)
     if args.target == 'prepare':
         return
     env = os.environ.copy()
@@ -99,9 +116,10 @@ def main():
              'src/compiler/clc/mesa_clc', 'src/compiler/spirv/vtn_bindgen2'], env=env)
         return
     target = args.target
-    prefix = ROOT / 'build' / target / 'sysroot'
+    dependencies = ROOT / 'build' / target / 'sysroot'
+    prefix = ROOT / 'build' / target / 'venus' if args.driver == 'venus' else dependencies
     env.update(PKG_CONFIG_PATH='', PKG_CONFIG_DIR='', PKG_CONFIG_LIBDIR=os.pathsep.join(
-        [str(prefix / 'lib/pkgconfig'), str(prefix / 'share/pkgconfig')]))
+        [str(dependencies / 'lib/pkgconfig'), str(dependencies / 'share/pkgconfig')]))
     env.pop('PKG_CONFIG_SYSROOT_DIR', None)
     env['PATH'] = os.pathsep.join([str(BASE / 'tools/src/compiler/clc'),
                                  str(BASE / 'tools/src/compiler/spirv'),
@@ -111,12 +129,18 @@ def main():
                '-Dshader-cache=disabled', '-Dzlib=disabled']
     if target == 'ps5':
         options += ['--cross-file', ROOT / 'build/ps5/cross.ini', '--native-file',
-                    ROOT / 'build/ps5/native.ini', '-Dvulkan-drivers=amd', '-Dradv-winsys=ps5',
-                    '-Dradv-build-id=' + digest[:40], '-Dllvm=disabled',
-                    '-Dcpp_args=-I' + str(prefix / 'include')]
+                    ROOT / 'build/ps5/native.ini', '-Dllvm=disabled',
+                    '-Dcpp_args=-I' + str(dependencies / 'include')]
+        if args.driver == 'venus':
+            options += ['-Dvulkan-drivers=virtio', '-Dvenus-ps5=true']
+        else:
+            options += ['-Dvulkan-drivers=amd', '-Dradv-winsys=ps5',
+                        '-Dradv-build-id=' + digest[:40]]
     else:
-        options += ['-Dvulkan-drivers=swrast', '-Dllvm=enabled', '-Dshared-llvm=enabled']
-    binary = configure(target, src, options, env)
+        drivers = 'virtio,swrast' if args.driver == 'venus' else 'swrast'
+        options += ['-Dvulkan-drivers=' + drivers, '-Dllvm=enabled', '-Dshared-llvm=enabled']
+    name = target + '-venus' if args.driver == 'venus' else target
+    binary = configure(name, src, options, env)
     run(['meson', 'compile', '-C', binary, '-j', JOBS], env=env)
     run(['meson', 'install', '-C', binary, '--no-rebuild'], env=env)
     if target == 'ps5':

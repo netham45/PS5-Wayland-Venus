@@ -27,14 +27,14 @@ int main(void) {
     VkFence fence = VK_NULL_HANDLE;
     int status = 1;
     ps5log_init("ps5wl-vktest", 9591);
-    ps5log("starting RADV GPU smoke pid=%d (no surface, no VideoOut)", getpid());
+    ps5log("starting %s GPU smoke pid=%d (no surface, no VideoOut)", PS5WL_DRIVER_NAME, getpid());
 #ifdef PS5WL_PS5
     const char *vram_override = getenv("override_vram_size");
     ps5log("direct memory pool bytes=%lld override_vram_size=%s",
         (long long)sceKernelGetDirectMemorySize(), vram_override ? vram_override : "(unset)");
 #endif
     if (ps5wl_vulkan_install() || load_vulkan_library() != VK_SUCCESS) {
-        ps5log("FAIL loading RADV library");
+        ps5log("FAIL loading %s library", PS5WL_DRIVER_NAME);
         goto fail;
     }
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,

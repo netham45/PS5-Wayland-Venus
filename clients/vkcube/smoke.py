@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Render the upstream Vulkan cube through real wl_shm on headless ps5wl."""
+import argparse
 import os
 from pathlib import Path
 import subprocess
@@ -10,10 +11,20 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / 'build/host'
 if os.environ.get('PS5WL_BUILD_ENV') != '1':
     raise SystemExit('Run env/run python3 clients/vkcube/smoke.py')
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--driver', choices=['radv', 'venus', 'lavapipe'], default='radv')
+args = parser.parse_args()
+variant = '' if args.driver == 'radv' else '-' + args.driver
+if args.driver == 'venus':
+    library = BUILD / 'venus/lib/libvulkan_virtio.so'
+elif args.driver == 'lavapipe':
+    library = ROOT / 'build/mesa/host-lavapipe/sysroot/lib/libvulkan_lvp.so'
+else:
+    library = BUILD / 'sysroot/lib/libvulkan_lvp.so'
 with tempfile.TemporaryDirectory(prefix='vkcube-', dir=BUILD) as runtime:
     env = dict(os.environ, XDG_RUNTIME_DIR=runtime, WAYLAND_DISPLAY='ps5wl-vkcube',
                WLR_RENDERER='pixman', LD_LIBRARY_PATH=str(BUILD / 'sysroot/lib'),
-               PS5WL_VULKAN_LIBRARY=str(BUILD / 'sysroot/lib/libvulkan_lvp.so'),
+               PS5WL_VULKAN_LIBRARY=str(library),
                XKB_CONFIG_ROOT=str(BUILD / 'sysroot/share/xkeyboard-config-2'))
     with tempfile.TemporaryFile(mode='w+') as server_log:
         server = subprocess.Popen([str(BUILD / 'compositor/ps5wl'), '-b', 'headless',
@@ -25,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='vkcube-', dir=BUILD) as runtime:
                 if server.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError('Compositor failed to create socket')
                 time.sleep(0.05)
-            result = subprocess.run([str(BUILD / 'vkcube/ps5wl-vkcube'), '--wsi', 'wayland',
+            result = subprocess.run([str(BUILD / ('vkcube' + variant) / ('ps5wl-vkcube' + variant)), '--wsi', 'wayland',
                                      '--c', '120'], env=env, timeout=90,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             print(result.stdout, end='')

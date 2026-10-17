@@ -1,0 +1,26 @@
+From: ps5wl contributors
+Subject: [PATCH] lavapipe: optional PS5-like external-fd extension mask
+
+Apply after dynamic dma-buf capability detection and before WSI setup.
+Ordinary SHM descriptors remain available; host-pointer imports stay enabled.
+This masks memory, fence and semaphore fd extensions, not POSIX descriptors.
+
+--- a/src/gallium/frontends/lavapipe/lvp_device.c
++++ b/src/gallium/frontends/lavapipe/lvp_device.c
+@@ -1532,6 +1532,16 @@
+       device->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer = true;
+ #endif
+ 
++   /* Host stand-in for PS5 RADV, which cannot import/export Vulkan fds. */
++   if (debug_get_bool_option("PS5WL_NO_EXTERNAL_FD", false)) {
++      device->vk.supported_extensions.KHR_external_memory_fd = false;
++      device->vk.supported_extensions.EXT_external_memory_dma_buf = false;
++      device->vk.supported_extensions.KHR_external_fence_fd = false;
++      device->vk.supported_extensions.KHR_external_semaphore_fd = false;
++      device->vk.supported_extensions.EXT_image_drm_format_modifier = false;
++      fprintf(stderr, "ps5wl lavapipe: external memory/fence/semaphore fd extensions disabled\n");
++   }
++
+    /* SNORM blending on llvmpipe fails CTS - disable by default */
+    device->snorm_blend = debug_get_bool_option("LVP_SNORM_BLEND", false);
+ 

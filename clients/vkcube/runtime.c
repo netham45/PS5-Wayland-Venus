@@ -8,9 +8,13 @@
 #include <unistd.h>
 #include "ps5log.h"
 
+#ifndef PS5WL_DRIVER_NAME
+#define PS5WL_DRIVER_NAME "radv"
+#endif
+
 #ifdef PS5WL_PS5
 #include "ps5_sce.h"
-extern const unsigned char _binary_radv_so_start[], _binary_radv_so_end[];
+extern const unsigned char _binary_driver_so_start[], _binary_driver_so_end[];
 static char driver_log[128];
 
 static void remove_driver_log(void) {
@@ -74,6 +78,12 @@ static void fatal_signal(int number) {
 #endif
 
 int ps5wl_vulkan_install(void) {
+    if (!getenv("PS5WL_VULKAN_LIBRARY"))
+        setenv("PS5WL_VULKAN_LIBRARY", PS5WL_VULKAN_DEFAULT_LIBRARY, 0);
+#ifdef PS5WL_VENUS
+    if (!getenv("VTEST_SOCKET_NAME"))
+        setenv("VTEST_SOCKET_NAME", "/system_tmp/ps5wl-gpu-0", 0);
+#endif
 #ifdef PS5WL_PS5
     signal(SIGABRT, fatal_signal);
     signal(SIGSEGV, fatal_signal);
@@ -84,15 +94,15 @@ int ps5wl_vulkan_install(void) {
      * /system_tmp is too small for the driver (measured ENOSPC at 256 KiB).
      */
     const char *directory = "/data/ps5wl";
-    const char *path = "/data/ps5wl/libvulkan.so.1";
+    const char *path = PS5WL_VULKAN_DEFAULT_LIBRARY;
     if (mkdir(directory, 0700) && errno != EEXIST) {
-        ps5log("RADV mkdir path=%s errno=%d %s", directory, errno, strerror(errno));
+        ps5log("%s mkdir path=%s errno=%d %s", PS5WL_DRIVER_NAME, directory, errno, strerror(errno));
         return -1;
     }
     snprintf(driver_log, sizeof(driver_log), "%s/mesa-%d.log", directory, getpid());
     int log_fd = open(driver_log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (log_fd < 0) {
-        ps5log("RADV log open errno=%d %s", errno, strerror(errno));
+        ps5log("%s log open errno=%d %s", PS5WL_DRIVER_NAME, errno, strerror(errno));
         return -1;
     }
     if (log_fd != STDERR_FILENO) {
@@ -100,7 +110,7 @@ int ps5wl_vulkan_install(void) {
             int saved = errno;
             close(log_fd);
             remove_driver_log();
-            ps5log("RADV log redirect errno=%d %s", saved, strerror(saved));
+            ps5log("%s log redirect errno=%d %s", PS5WL_DRIVER_NAME, saved, strerror(saved));
             return -1;
         }
         close(log_fd);
@@ -111,24 +121,24 @@ int ps5wl_vulkan_install(void) {
     snprintf(temporary, sizeof(temporary), "%s.tmp.%d", path, getpid());
     FILE *file = fopen(temporary, "wb");
     if (!file) {
-        ps5log("RADV fopen path=%s errno=%d %s", temporary, errno, strerror(errno));
+        ps5log("%s fopen path=%s errno=%d %s", PS5WL_DRIVER_NAME, temporary, errno, strerror(errno));
         return -1;
     }
-    size_t length = (size_t)(_binary_radv_so_end - _binary_radv_so_start);
-    size_t written = fwrite(_binary_radv_so_start, 1, length, file);
+    size_t length = (size_t)(_binary_driver_so_end - _binary_driver_so_start);
+    size_t written = fwrite(_binary_driver_so_start, 1, length, file);
     int rc = fclose(file);
     if (written != length || rc) {
-        ps5log("RADV write bytes=%zu expected=%zu close=%d errno=%d %s",
-            written, length, rc, errno, strerror(errno));
+        ps5log("%s write bytes=%zu expected=%zu close=%d errno=%d %s",
+            PS5WL_DRIVER_NAME, written, length, rc, errno, strerror(errno));
         unlink(temporary);
         return -1;
     }
     if (rename(temporary, path)) {
-        ps5log("RADV rename path=%s errno=%d %s", path, errno, strerror(errno));
+        ps5log("%s rename path=%s errno=%d %s", PS5WL_DRIVER_NAME, path, errno, strerror(errno));
         unlink(temporary);
         return -1;
     }
-    ps5log("RADV library extracted bytes=%zu path=%s", length, path);
+    ps5log("%s library extracted bytes=%zu path=%s", PS5WL_DRIVER_NAME, length, path);
     return 0;
 #else
     return 0;

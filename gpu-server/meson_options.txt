@@ -1,0 +1,1 @@
+option('vkr_source', type: 'string', description: 'Prepared pinned virglrenderer 1.2.0 source directory')

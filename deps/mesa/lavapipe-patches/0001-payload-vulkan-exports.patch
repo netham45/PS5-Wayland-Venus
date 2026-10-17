@@ -1,0 +1,35 @@
+From: ps5wl contributors
+Subject: [PATCH] lavapipe: export Vulkan API for loaderless PS5 payloads
+
+Reuse pacbrew's reviewed-in-tree loaderless export generator. This does not
+change the normal Linux ICD and introduces no RADV or VideoOut dependency.
+
+--- a/src/gallium/targets/lavapipe/meson.build
++++ b/src/gallium/targets/lavapipe/meson.build
+@@ -1,5 +1,16 @@
+ 
+ 
++lvp_payload_exports = []
++if host_machine.system() == 'freebsd'
++  lvp_payload_exports += custom_target(
++    'lvp_vk_exports',
++    input : [vk_exports_gen, vk_api_xml],
++    output : 'vk_exports.c',
++    command : [prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--out-c', '@OUTPUT@'],
++    depend_files : vk_entrypoints_gen_depend_files,
++  )
++endif
++
+ libvulkan_lvp = shared_library(
+   'vulkan_lvp',
+-  [ 'lavapipe_target.c' ],
++  [ 'lavapipe_target.c', lvp_payload_exports ],
+@@ -13,7 +24,7 @@
+   # The linker still expects a definition for weak symbols at build time, just not at runtime.
+   # We have to forcibly ignore undefined symbols, which unfortunately applies to all symbols.
+   override_options : ['b_lundef=@0@'.format(host_machine.system() == 'darwin' ? 'false' : get_option('b_lundef').to_string())],
+-  dependencies : [driver_llvmpipe, idep_mesautil],
++  dependencies : [driver_llvmpipe, idep_mesautil, idep_vulkan_runtime],
+   name_prefix : host_machine.system() == 'windows' ? '' : [],
+   install : true,
+ )

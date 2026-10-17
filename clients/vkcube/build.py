@@ -19,12 +19,23 @@ spec.loader.exec_module(mesa)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('target', choices=['host', 'ps5'])
+    parser.add_argument('--driver', choices=['radv', 'venus', 'lavapipe'], default='radv')
     args = parser.parse_args()
     if os.environ.get('PS5WL_BUILD_ENV') != '1':
         raise SystemExit('Use env/run clients/vkcube/build.sh host|ps5')
     target = args.target
     prefix = ROOT / 'build' / target / 'sysroot'
-    binary = ROOT / 'build' / target / 'vkcube'
+    driver = args.driver
+    variant = '' if driver == 'radv' else '-' + driver
+    binary = ROOT / 'build' / target / ('vkcube' + variant)
+    if driver == 'venus':
+        driver_prefix = ROOT / 'build' / target / 'venus'
+        library = driver_prefix / 'lib' / ('libvulkan-venus.so.1' if target == 'ps5' else 'libvulkan_virtio.so')
+    elif driver == 'lavapipe':
+        library = ROOT / 'build/mesa' / (target + '-lavapipe') / 'sysroot/lib/libvulkan_lvp.so'
+    else:
+        library = prefix / 'lib' / ('libvulkan.so.1' if target == 'ps5' else 'libvulkan_lvp.so')
+    runtime_library = '/data/ps5wl/libvulkan' + variant + '.so.1' if target == 'ps5' else str(library)
     binary.mkdir(parents=True, exist_ok=True)
     patches = sorted((ROOT / 'clients/vkcube/patches').glob('*.patch'))
     digest = hashlib.sha256(mesa.fetch('vulkan-tools').read_bytes() + b''.join(p.read_bytes() for p in patches)).hexdigest()
@@ -56,6 +67,10 @@ def main():
     common = ['-O2', '-g', '-I' + str(cube), '-I' + str(binary),
               '-I' + str(ROOT / 'build/mesa/sources' / mesa.PINS['mesa']['source_dir'] / 'include'),
               '-I' + str(ROOT / 'common/ps5log'), '-I' + str(ROOT / 'common/ps5wl-client')]
+    common += ['-DPS5WL_VULKAN_DEFAULT_LIBRARY="' + runtime_library + '"',
+               '-DPS5WL_DRIVER_NAME="' + driver + '"']
+    if driver == 'venus':
+        common += ['-DPS5WL_VENUS=1']
     libs = ['-pthread']
     if target == 'ps5':
         # Manual payload links consume the same toolchain contract as Mesa.
@@ -64,20 +79,21 @@ def main():
             cross.read_file(stream)
         compiler = ast.literal_eval(cross['binaries']['c'])
         common += ['-DPS5WL_PS5=1'] + ast.literal_eval(cross['built-in options']['c_args'])
-        library = prefix / 'lib/libvulkan.so.1'
-        shutil.copyfile(library, binary / 'radv.so')
+        shutil.copyfile(library, binary / 'driver.so')
         mesa.run(['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
-                  'radv.so', 'radv.o'], cwd=binary)
-        libs += [binary / 'radv.o', '-lSceAgc', '-lSceAgcDriver', '-Wl,--wrap=__assert']
+                  'driver.so', 'driver.o'], cwd=binary)
+        libs += [binary / 'driver.o', '-Wl,--wrap=__assert']
+        if driver == 'radv':
+            libs += ['-lSceAgc', '-lSceAgcDriver']
         libs += ast.literal_eval(cross['built-in options']['c_link_args'])
     else:
         libs += ['-lm', '-ldl']
     runtime = [ROOT / 'clients/vkcube/runtime.c', ROOT / 'common/ps5log/ps5log.c']
     mesa.run([compiler] + common + [ROOT / 'clients/vkcube/vktest.c'] + runtime + libs +
-             ['-o', binary / ('ps5wl-vktest.elf' if target == 'ps5' else 'ps5wl-vktest')], env=env)
+             ['-o', binary / ('ps5wl-vktest' + variant + ('.elf' if target == 'ps5' else ''))], env=env)
     mesa.run([compiler] + common + ['-DVK_USE_PLATFORM_WAYLAND_KHR', cube / 'cube.c'] + generated + runtime +
              [ROOT / 'common/ps5wl-client/ps5wl-client.c'] + flags + libs +
-             ['-o', binary / ('ps5wl-vkcube.elf' if target == 'ps5' else 'ps5wl-vkcube')], env=env)
+             ['-o', binary / ('ps5wl-vkcube' + variant + ('.elf' if target == 'ps5' else ''))], env=env)
 
 
 if __name__ == '__main__':

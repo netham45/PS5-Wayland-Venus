@@ -24,6 +24,63 @@ same patched Mesa source and uses only the project's host Wayland sysroot.
 Shader caches and compression dependencies are disabled for these payloads.
 The build does not enable EGL, OpenGL, X11, GBM, or the VideoOut platform.
 
+## Venus and lavapipe variants
+
+```
+env/run deps/mesa/build.sh host --driver venus
+env/run deps/mesa/build.sh ps5 --driver venus
+env/run clients/vkcube/build.sh host --driver venus
+env/run clients/vkcube/build.sh ps5 --driver venus
+```
+
+Venus uses an isolated patched source tree (`build/mesa/sources/mesa-26.2.0-venus`)
+and build directories `build/mesa/{host,ps5}-venus`; it never replaces RADV.
+The host prefix `build/host/venus` contains `lib/libvulkan_virtio.so` and
+`lib/libvulkan_lvp.so` plus their ICD manifests under `share/vulkan/icd.d`.
+Use `LD_LIBRARY_PATH=$PWD/build/host/sysroot/lib` when loading these host
+drivers, including from Python/ctypes; their pinned libdrm dependency lives
+there, not in the container's system library directory.
+Set `PS5WL_NO_EXTERNAL_FD=true` in the **server's** environment to mask
+lavapipe's external memory/fence/semaphore fd and DRM-modifier extensions.
+The switch is applied after capability detection and before WSI initialisation;
+it leaves `VK_EXT_external_memory_host` and ordinary POSIX SHM fds available.
+This is the GPU server's host stand-in, not a claim that SHM GPU imports work
+on the console.
+
+The PS5 prefix `build/ps5/venus` contains `lib/libvulkan-venus.so.1`.
+It reuses pacbrew patch 0021's `vk_exports_gen.py` dispatch wrappers and symbol
+map, exporting the core `vk*` API without a Vulkan loader. Its library name is
+distinct from RADV; native Venus clients extract it atomically to
+`/data/ps5wl/libvulkan-venus.so.1`. The driver itself defaults to the vtest
+socket `/system_tmp/ps5wl-gpu-0`, overridable with `VTEST_SOCKET_NAME`; no
+`VN_DEBUG=vtest` or client environment is required on PS5. DRM and VideoOut are
+not compiled into this variant. All PS5 compiler/linker paths still use
+`cross/bin` and its descriptor wrappers.
+
+Source review of `vn_wsi.c:134-185` confirms that absence of the renderer's
+dma-buf extension sets common WSI's software-transport flag; shaders still
+execute on the server. Venus does not advertise `EXT_external_memory_host`,
+so `wsi_common_wayland.c` chooses `WSI_IMAGE_TYPE_CPU` with
+`WSI_WL_BUFFER_SHM_MEMCPY`, not direct client host-pointer import. Common WSI
+uses an image-to-buffer blit by default, maps the host-visible buffer, waits
+for completion, then copies to a real `wl_shm` pool. Existing patch 0001
+already supports this path; no extra Venus WSI patch is needed. Rendering
+correctness still requires the GPU server's end-to-end tests.
+
+The independent CPU fallback is built with:
+
+```
+env/run deps/mesa/build.sh host --driver lavapipe
+env/run deps/mesa/build.sh ps5 --driver lavapipe
+env/run clients/vkcube/build.sh host --driver lavapipe
+env/run clients/vkcube/build.sh ps5 --driver lavapipe
+```
+
+`deps/mesa/lavapipe.py` owns its isolated LLVM/Mesa configuration and installs
+under `build/mesa/{host,ps5}-lavapipe/sysroot`. These clients use
+`/data/ps5wl/libvulkan-lavapipe.so.1` on PS5 and need no GPU server or RADV.
+
+
 ## Presentation path
 
 `0001-wayland-hardware-shm.patch` binds `wl_shm` for hardware devices too,
