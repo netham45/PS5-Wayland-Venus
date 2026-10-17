@@ -13,14 +13,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#ifdef PS5WL_PS5
+#include "ps5log.h"
+#endif
 
-struct context { uint32_t id; uint64_t host_bytes, device_bytes; unsigned allocations; gpud_retire_fn retire; void *opaque; struct context *next; };
+struct resource { uint32_t id; uint64_t shm_bytes; struct resource *next; };
+struct context { uint32_t id; uint64_t host_bytes, device_bytes; unsigned allocations; struct resource *resources; gpud_retire_fn retire; void *opaque; struct context *next; };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t cb_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct context *contexts;
 static uint32_t next_id = 1;
 static unsigned context_count, max_contexts;
+#ifdef PS5WL_PS5
+#define GPUD_DEFAULT_CONTEXTS 2
+#define GPUD_DEFAULT_HOST_MIB 128
+#else
+#define GPUD_DEFAULT_CONTEXTS 32
+#define GPUD_DEFAULT_HOST_MIB 512
+#endif
 static bool started;
+static atomic_bool stopping;
 static uint64_t host_limit, device_limit;
 static atomic_uint_fast64_t fd_exports;
 void gpud_record_fd_export(void) { atomic_fetch_add(&fd_exports, 1); }
@@ -51,22 +64,31 @@ void gpud_memory_release(uint32_t id, bool host, uint64_t bytes)
 }
 static void retire(uint32_t id, uint32_t ring, uint64_t fence)
 {
+    gpud_retire_fn fn = NULL;
+    void *opaque = NULL;
     pthread_mutex_lock(&cb_lock);
     for (struct context *c = contexts; c; c = c->next)
-        if (c->id == id) { c->retire(c->opaque, ring, fence); break; }
+        if (c->id == id) { fn = c->retire; opaque = c->opaque; break; }
     pthread_mutex_unlock(&cb_lock);
+    /* vkr context destruction joins callback threads before removing the
+     * registration. Never hold the shared registry lock across client code. */
+    if (fn) fn(opaque, ring, fence);
 }
 static void logger(enum virgl_log_level_flags level, const char *message, void *opaque)
 {
     (void)level; (void)opaque;
-    fprintf(stderr, "%s", message);
+#ifdef PS5WL_PS5
+    ps5log("gpud: %s", message);
+#else
+    fprintf(stderr, "%s\n", message);
+#endif
 }
 static const struct vkr_renderer_callbacks callbacks = { .debug_logger = logger, .retire_fence = retire };
 size_t gpud_core_capset(void *data) { return vkr_get_capset(data, 0); }
 uint32_t gpud_core_context_create(const char *name, gpud_retire_fn fn, void *opaque)
 {
     struct context *c = calloc(1, sizeof(*c));
-    if (!c || !fn) { free(c); return 0; }
+    if (!c || !fn || atomic_load(&stopping)) { free(c); return 0; }
     pthread_mutex_lock(&lock);
     if (!started || context_count >= max_contexts || !next_id) goto fail;
     c->id = next_id++;
@@ -88,12 +110,19 @@ void gpud_core_context_destroy(uint32_t id)
     pthread_mutex_lock(&cb_lock);
     struct context **p = &contexts;
     while (*p && (*p)->id != id) p = &(*p)->next;
-    if (*p) { struct context *c = *p; *p = c->next; free(c); context_count--; }
+    if (*p) {
+        struct context *c = *p;
+        while (c->resources) {
+            struct resource *r = c->resources; c->resources = r->next; free(r);
+        }
+        *p = c->next; free(c); context_count--;
+    }
     pthread_mutex_unlock(&cb_lock);
     pthread_mutex_unlock(&lock);
 }
 bool gpud_core_submit(uint32_t ctx, void *data, uint32_t size)
 {
+    if (atomic_load(&stopping)) return false;
     pthread_mutex_lock(&lock);
     bool ok = vkr_renderer_submit_cmd(ctx, data, size);
     pthread_mutex_unlock(&lock); return ok;
@@ -114,10 +143,27 @@ int gpud_core_blob(uint32_t ctx, uint32_t res, uint64_t blob, uint64_t size,
     struct virgl_resource_vulkan_info info;
     int fd = -1;
     pthread_mutex_lock(&lock);
-    bool ok = vkr_renderer_create_resource(ctx, res, blob, size, flags, &type, &fd, map_info, &info);
+    struct context *c = contexts;
+    while (c && c->id != ctx) c = c->next;
+    struct resource *entry = c ? c->resources : NULL;
+    while (entry && entry->id != res) entry = entry->next;
+    bool ok = false;
+    if (!c || entry || atomic_load(&stopping)) goto out;
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) goto out;
+    if (!blob && !gpud_memory_reserve(ctx, true, size)) { free(entry); goto out; }
+    ok = vkr_renderer_create_resource(ctx, res, blob, size, flags, &type, &fd, map_info, &info);
     if (ok && type != VIRGL_RESOURCE_FD_SHM) {
-        close(fd); fd = -1; vkr_renderer_destroy_resource(ctx, res);
+        close(fd); fd = -1; vkr_renderer_destroy_resource(ctx, res); ok = false;
     }
+    if (!ok) {
+        if (!blob) gpud_memory_release(ctx, true, size);
+        free(entry);
+    } else {
+        entry->id = res; entry->shm_bytes = blob ? 0 : size;
+        entry->next = c->resources; c->resources = entry;
+    }
+out:
     pthread_mutex_unlock(&lock);
     return ok ? fd : -1;
 }
@@ -125,6 +171,15 @@ void gpud_core_unref(uint32_t ctx, uint32_t res)
 {
     pthread_mutex_lock(&lock);
     vkr_renderer_destroy_resource(ctx, res);
+    struct context *c = contexts;
+    while (c && c->id != ctx) c = c->next;
+    struct resource **p = c ? &c->resources : NULL;
+    while (p && *p && (*p)->id != res) p = &(*p)->next;
+    if (p && *p) {
+        struct resource *entry = *p; *p = entry->next;
+        if (entry->shm_bytes) gpud_memory_release(ctx, true, entry->shm_bytes);
+        free(entry);
+    }
     pthread_mutex_unlock(&lock);
 }
 int ps5wl_gpud_start(const struct ps5wl_gpud_config *config)
@@ -132,10 +187,11 @@ int ps5wl_gpud_start(const struct ps5wl_gpud_config *config)
     const struct ps5wl_gpud_config zero = {0};
     if (!config) config = &zero;
     if (started) return -EALREADY;
-    max_contexts = config->max_ctx ? config->max_ctx : 32;
-    host_limit = config->host_bytes_per_ctx ? config->host_bytes_per_ctx : UINT64_C(512) * 1024 * 1024;
+    max_contexts = config->max_ctx ? config->max_ctx : GPUD_DEFAULT_CONTEXTS;
+    host_limit = config->host_bytes_per_ctx ? config->host_bytes_per_ctx : (uint64_t)GPUD_DEFAULT_HOST_MIB * 1024 * 1024;
     device_limit = config->device_bytes_per_ctx ? config->device_bytes_per_ctx : UINT64_C(1024) * 1024 * 1024;
     atomic_store(&fd_exports, 0);
+    atomic_store(&stopping, false);
     if (!vkr_renderer_init(VKR_RENDERER_THREAD_SYNC | VKR_RENDERER_ASYNC_FENCE_CB, &callbacks)) return -ENODEV;
     started = true;
     const char *path = config->vtest_path;
@@ -149,11 +205,24 @@ int ps5wl_gpud_start(const struct ps5wl_gpud_config *config)
 int ps5wl_gpud_stop(unsigned drain_ms)
 {
     if (!started) return 0;
+    atomic_store(&stopping, true);
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     gpud_vtest_shutdown();
+    gpud_render_shutdown();
     int result = gpud_vtest_drain(drain_ms);
-    if (result) { fprintf(stderr, "gpud wedged: drain timed out; preserving mappings\n"); return result; }
-    gpud_render_stop();
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    int64_t elapsed = (end.tv_sec - start.tv_sec) * INT64_C(1000) +
+                      (end.tv_nsec - start.tv_nsec) / 1000000;
+    unsigned left = elapsed < drain_ms ? drain_ms - elapsed : 0;
+    int render_result = gpud_render_drain(left);
+    if (result || render_result) {
+        logger(VIRGL_LOG_LEVEL_ERROR, "gpud wedged: drain timed out; preserving mappings", NULL);
+        return -EBUSY;
+    }
     vkr_renderer_fini(); started = false;
-    fprintf(stderr, "gpud stopped: Vulkan fd-export calls=%" PRIu64 "\n", gpud_fd_export_count());
+    char message[96];
+    snprintf(message, sizeof(message), "gpud stopped: Vulkan fd-export calls=%" PRIu64, gpud_fd_export_count());
+    logger(VIRGL_LOG_LEVEL_INFO, message, NULL);
     return 0;
 }

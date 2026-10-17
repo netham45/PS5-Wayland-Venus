@@ -8,6 +8,13 @@
 #include "render_protocol.h"
 #define GPUD_RENDER_MAX_FRAME (1024u * 1024u)
 #define GPUD_RENDER_MAX_FDS 2
+_Static_assert(sizeof(size_t) == 8 && sizeof(enum render_context_op) == 4,
+               "render protocol requires the pinned x86-64 ABI");
+_Static_assert(sizeof(struct render_client_op_create_context_request) == 40 &&
+               sizeof(struct render_context_op_init_request) == 16 &&
+               sizeof(struct render_context_op_create_resource_request) == 32 &&
+               sizeof(struct render_context_op_submit_cmd_request) == 264,
+               "render protocol structure ABI changed");
 /* Upstream has no capset request: its proxy obtains it locally. */
 #define GPUD_RENDER_GET_CAPSET RENDER_CLIENT_OP_COUNT
 struct gpud_render_capset_request { uint32_t op, capset_id, version; };

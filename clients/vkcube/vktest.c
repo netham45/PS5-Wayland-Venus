@@ -26,7 +26,7 @@ int main(void) {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     int status = 1;
-    ps5log_init("ps5wl-vktest", 9591);
+    ps5log_init("ps5wl-vktest", PS5WL_VKTEST_LOG_PORT);
     ps5log("starting %s GPU smoke pid=%d (no surface, no VideoOut)", PS5WL_DRIVER_NAME, getpid());
 #ifdef PS5WL_PS5
     const char *vram_override = getenv("override_vram_size");

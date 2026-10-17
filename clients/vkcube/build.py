@@ -68,7 +68,9 @@ def main():
               '-I' + str(ROOT / 'build/mesa/sources' / mesa.PINS['mesa']['source_dir'] / 'include'),
               '-I' + str(ROOT / 'common/ps5log'), '-I' + str(ROOT / 'common/ps5wl-client')]
     common += ['-DPS5WL_VULKAN_DEFAULT_LIBRARY="' + runtime_library + '"',
-               '-DPS5WL_DRIVER_NAME="' + driver + '"']
+               '-DPS5WL_DRIVER_NAME="' + driver + '"',
+               '-DPS5WL_VKCUBE_LOG_PORT=' + ('9590' if target == 'ps5' else '0'),
+               '-DPS5WL_VKTEST_LOG_PORT=' + ('9591' if target == 'ps5' else '0')]
     if driver == 'venus':
         common += ['-DPS5WL_VENUS=1']
     libs = ['-pthread']

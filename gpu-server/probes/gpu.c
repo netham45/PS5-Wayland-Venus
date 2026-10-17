@@ -155,6 +155,17 @@ int main(void) {
     if (rc || !app.app_id || app.app_id != (uint32_t)foreground) shell_exit();
 #else
     ps5log_init("ps5wl-gpu-c2a", 9593);
+    app_info_t app = {0};
+    int app_rc = sceKernelGetAppInfo(getpid(), &app);
+    int foreground = sceSystemServiceGetAppIdOfRunningBigApp();
+    ps5log("plain context pid=%d app_rc=0x%x own_app=0x%x foreground=0x%x",
+           getpid(), app_rc, app.app_id, foreground);
+    if ((uint32_t)foreground == UINT32_MAX || foreground <= 0 ||
+        (!app_rc && app.app_id == (uint32_t)foreground)) {
+        ps5log("STOP C2a requires a separate foreground compositor");
+        ps5log_flush_wait(5000);
+        return 1;
+    }
 #endif
     int status = 1, fd = -1, wedged = 0;
     void *mapping = MAP_FAILED, *library = NULL;

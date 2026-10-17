@@ -1,6 +1,8 @@
 #ifndef GPUD_HOST_MEMORY_H
 #define GPUD_HOST_MEMORY_H
 #include "memory_mask.h"
+#include "util/anon_file.h"
+#include <unistd.h>
 #include <sys/mman.h>
 /* Query before advertising memory types, not after the client chooses a type.
  * The extension exposes the query on a logical device, so use a short-lived
@@ -13,8 +15,12 @@ static uint32_t gpud_query_host_types(struct vkr_physical_device *p)
     uint64_t align = MAX2(UINT64_C(16384), p->min_imported_host_pointer_alignment);
     if ((align & (align - 1)) || align > SIZE_MAX / 2)
         return 0;
+    int fd = os_create_anonymous_file(align * 2, "vkr-type-probe");
+    if (fd < 0)
+        return 0;
     void *base = mmap(NULL, align * 2, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                      MAP_SHARED, fd, 0);
+    close(fd);
     if (base == MAP_FAILED)
         return 0;
     void *ptr = (void *)(((uintptr_t)base + align - 1) & ~(uintptr_t)(align - 1));

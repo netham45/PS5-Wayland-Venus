@@ -39,6 +39,7 @@ static pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t clients_cond = PTHREAD_COND_INITIALIZER;
 static struct client *clients;
 static int listener = -1;
+static int listener_wake[2] = {-1, -1};
 static pthread_t accept_thread;
 static bool accepting;
 static char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -91,7 +92,7 @@ static void check_waits(struct client *c)
         if (!done && now < w->deadline) { p = &w->next; continue; }
         /* Keep our read end until after writing, so a dead client cannot raise
          * SIGPIPE in the compositor. Exactly one byte is ever written. */
-        if (done) { char byte = 1; ssize_t n; do { n = write(w->writefd, &byte, 1); } while (n < 0 && errno == EINTR); }
+        { char byte = 1; ssize_t n; do { n = write(w->writefd, &byte, 1); } while (n < 0 && errno == EINTR); }
         close(w->writefd); close(w->readfd);
         *p = w->next; free(w); c->waiting_count--;
     }
@@ -105,8 +106,10 @@ static void retire(void *opaque, uint32_t ring, uint64_t fence)
     while (*p && (*p)->fence != fence) p = &(*p)->next;
     if (*p) {
         struct pending *b = *p;
-        for (unsigned i = 0; i < b->count; i++)
-            c->syncs[b->points[i].id].value = b->points[i].value;
+        for (unsigned i = 0; i < b->count; i++) {
+            struct sync *s = &c->syncs[b->points[i].id];
+            if (s->value < b->points[i].value) s->value = b->points[i].value;
+        }
         *p = b->next; free(b); c->pending_count--;
         check_waits(c);
     }
@@ -274,13 +277,31 @@ static void *accept_main(void *unused)
 {
     (void)unused;
     for (;;) {
+        struct pollfd fds[] = {{listener, POLLIN, 0}, {listener_wake[0], POLLIN, 0}};
+        int ready = poll(fds, 2, -1);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready < 0 || fds[1].revents) break;
+        if (!(fds[0].revents & POLLIN)) break;
         int fd = accept(listener, NULL, NULL);
-        if (fd < 0) { if (errno == EINTR) continue; break; }
+        if (fd < 0) { if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue; break; }
         fcntl(fd, F_SETFD, FD_CLOEXEC);
+        int flags = fcntl(fd, F_GETFL);
+        if (flags >= 0) fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
         struct client *c = calloc(1, sizeof(*c));
         if (!c) { close(fd); continue; }
         c->fd = fd; c->sync_count = 1; pthread_mutex_init(&c->mutex, NULL);
         pthread_mutex_lock(&clients_lock);
+        unsigned peers = 0;
+        for (struct client *peer = clients; peer; peer = peer->next) peers++;
+#ifdef PS5WL_PS5
+        const unsigned connection_limit = 4;
+#else
+        const unsigned connection_limit = 64;
+#endif
+        if (peers >= connection_limit) {
+            pthread_mutex_unlock(&clients_lock);
+            close(fd); pthread_mutex_destroy(&c->mutex); free(c); continue;
+        }
         c->next = clients; clients = c;
         pthread_t thread;
         int error = pthread_create(&thread, NULL, client_main, c);
@@ -297,18 +318,28 @@ int gpud_vtest_start(const char *path)
     listener = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listener < 0) return -errno;
     fcntl(listener, F_SETFD, FD_CLOEXEC);
+    fcntl(listener, F_SETFL, O_NONBLOCK);
     struct sockaddr_un addr = {.sun_family = AF_UNIX}; strcpy(addr.sun_path, path);
     if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) || listen(listener, 32)) {
         int error = errno; close(listener); listener = -1; return -error;
     }
+    if (pipe(listener_wake)) {
+        int error = errno; close(listener); listener = -1; unlink(path); return -error;
+    }
+    fcntl(listener_wake[0], F_SETFD, FD_CLOEXEC);
+    fcntl(listener_wake[1], F_SETFD, FD_CLOEXEC);
     int error = pthread_create(&accept_thread, NULL, accept_main, NULL);
-    if (error) { close(listener); listener = -1; unlink(path); return -error; }
+    if (error) { close(listener); listener = -1; close(listener_wake[0]); close(listener_wake[1]); unlink(path); return -error; }
     accepting = true; return 0;
 }
 void gpud_vtest_shutdown(void)
 {
     if (accepting) {
-        shutdown(listener, SHUT_RDWR); pthread_join(accept_thread, NULL);
+        char byte = 1;
+        ssize_t n;
+        do { n = write(listener_wake[1], &byte, 1); } while (n < 0 && errno == EINTR);
+        pthread_join(accept_thread, NULL);
+        close(listener_wake[0]); close(listener_wake[1]);
         close(listener); listener = -1; accepting = false; unlink(socket_path);
     }
     pthread_mutex_lock(&clients_lock);

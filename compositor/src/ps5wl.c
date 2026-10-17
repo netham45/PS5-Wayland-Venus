@@ -37,6 +37,9 @@
 #include "backend/ps5/ps5.h"
 #include "ps5log.h"
 #include "ps5wl-keymap.h"
+#if !PS5WL_VIDEOOUT_ONLY
+#include <ps5wl_gpud.h>
+#endif
 #else
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_virtual_pointer_v1.h>
@@ -1012,6 +1015,18 @@ static void payload_log(enum wlr_log_importance importance, const char *fmt, va_
 	vsnprintf(line, sizeof(line), fmt, args);
 	ps5log("%s", line);
 }
+#if !PS5WL_VIDEOOUT_ONLY
+static bool gpud_started;
+static void stop_gpu_daemon(void) {
+	if (!gpud_started) return;
+	gpud_started = false;
+	/* The main loop is no longer sending heartbeats during the bounded drain. */
+	ps5_safety_grace(8000);
+	int result = ps5wl_gpud_stop(5000);
+	ps5log("gpud stop result=%d%s", result,
+		result == -EBUSY ? "; preserving GPU mappings until native app exit" : "");
+}
+#endif
 #else
 static void virtual_keyboard_created(struct wl_listener *listener, void *data) {
 	struct tinywl_server *server = wl_container_of(listener, server, virtual_keyboard);
@@ -1116,6 +1131,12 @@ static int compositor_main(int argc, char *argv[]) {
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
+#if defined(PS5WL_PS5) && !PS5WL_VIDEOOUT_ONLY
+	ps5_safety_grace(30000);
+	int gpu_result = ps5wl_gpud_start(NULL);
+	gpud_started = gpu_result == 0;
+	ps5log("gpud start result=%d; compositor renderer remains pixman", gpu_result);
+#endif
 #ifdef PS5WL_PS5
 	server.backend = ps5_backend_create(server.wl_display);
 #else
@@ -1334,6 +1355,9 @@ static int compositor_main(int argc, char *argv[]) {
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",
 			socket);
 	wl_display_run(server.wl_display);
+#if defined(PS5WL_PS5) && !PS5WL_VIDEOOUT_ONLY
+	stop_gpu_daemon();
+#endif
 
 
 	/* Once wl_display_run returns, we destroy all clients then shut down the
@@ -1386,6 +1410,9 @@ int main(int argc, char *argv[]) {
 #endif
 	int status = compositor_main(argc, argv);
 #ifdef PS5WL_PS5
+#if !PS5WL_VIDEOOUT_ONLY
+	stop_gpu_daemon();
+#endif
 	/* BigApps require SDL's SystemServiceLoadExec("exit") lifecycle request. */
 	ps5log_flush_wait(1000);
 	ps5_process_exit(status);

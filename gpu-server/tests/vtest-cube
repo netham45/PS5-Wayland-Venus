@@ -3,10 +3,10 @@
 import argparse
 import os
 from pathlib import Path
-import signal
 import subprocess
 import tempfile
 import time
+import vtest_protocol
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,7 +49,7 @@ def main():
                    VTEST_SOCKET_NAME=str(runtime/'vtest'),
                    XKB_CONFIG_ROOT=str(ROOT/'build/host/sysroot/share/xkeyboard-config-2'),
                    LD_LIBRARY_PATH=str(ROOT/'build/host/sysroot/lib'),
-                   PS5WL_NO_EXTERNAL_FD='true', ASAN_OPTIONS='abort_on_error=1:detect_leaks=1',
+                   PS5WL_NO_EXTERNAL_FD='true', ASAN_OPTIONS='abort_on_error=1:detect_leaks=1:fast_unwind_on_malloc=0',
                    UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
         # Neither executable creates a child: Python is the external orchestrator.
         with (logs/'compositor.log').open('w') as cl, (logs/'server.log').open('w') as sl:
@@ -60,6 +60,7 @@ def main():
             try:
                 ready(runtime/env['WAYLAND_DISPLAY'], compositor)
                 ready(runtime/'vtest', server)
+                vtest_protocol.run(runtime/'vtest')
                 client_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_virtio.so'))
                 cube = ROOT/'build/host/vkcube-venus/ps5wl-vkcube-venus'
                 def launch(name, frames):
@@ -67,7 +68,14 @@ def main():
                     p = subprocess.Popen([str(cube),'--wsi','wayland','--c',str(frames)], env=client_env, stdout=out, stderr=out)
                     out.close(); children.append(p); return p
                 def passed(p, name):
-                    code = p.wait(timeout=120)
+                    deadline = time.monotonic() + 120
+                    while p.poll() is None:
+                        if server.poll() is not None:
+                            raise RuntimeError(f'GPU host exited={server.returncode}; see {logs}')
+                        if time.monotonic() > deadline:
+                            raise RuntimeError(f'{name}: timed out; see {logs}')
+                        time.sleep(.02)
+                    code = p.returncode
                     text = (logs/(name+'.log')).read_text()
                     if code or 'vkcube presented frame=120' not in text or 'vkcube exit frames=120 validation_error=0' not in text:
                         raise RuntimeError(f'{name}: exit={code}; see {logs}')
@@ -94,6 +102,8 @@ def main():
             finally:
                 for p in children:
                     if p.poll() is None: p.kill(); p.wait()
+                if server.poll() is None:
+                    (logs/'server-maps.log').write_text((Path('/proc')/str(server.pid)/'maps').read_text())
                 stop(server); stop(compositor)
         server_text = (logs/'server.log').read_text()
         compositor_text = (logs/'compositor.log').read_text()

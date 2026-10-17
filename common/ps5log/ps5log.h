@@ -5,10 +5,11 @@
 #include <stddef.h>
 
 /*
- * One server per process; lifetime ends at process exit. port == 0 selects
- * 9530. Listens on INADDR_ANY, retains 256 lines of up to 1024 bytes and
- * serves up to 16 clients. Slow clients overtaken by ring wrap disconnect;
- * logging never waits on network clients. Returns 0, or -1 with errno.
+ * One server per process; lifetime ends at process exit. port == 0 requests
+ * an ephemeral OS-selected port. Listens on INADDR_ANY, retains 256 lines of
+ * up to 1024 bytes and serves up to 16 clients. Slow clients overtaken by ring
+ * wrap disconnect; logging never waits on network clients. Returns 0, or -1
+ * with errno.
  */
 int ps5log_init(const char *name, uint16_t port);
 /*

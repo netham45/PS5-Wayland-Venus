@@ -44,8 +44,10 @@ must override it with their private GPU server socket. The readback test
 initialises this transport even though it does not initialise Wayland.
 These are vtest clients: neither requires a client GPU/direct-memory budget.
 The PS5 driver and payload links retain the common fd wrappers and assert
-diagnostics. Log ports remain 9590 (cube) and 9591 (readback), so different
+diagnostics. PS5 log ports remain 9590 (cube) and 9591 (readback), so different
 driver variants must not run their same test simultaneously on the console.
+Host variants request an ephemeral TCP log port so concurrent cubes and
+readback clients do not collide; host test harnesses capture their stderr.
 
 `--driver lavapipe` uses the independent CPU fallback installed by
 `deps/mesa/build.sh host|ps5 --driver lavapipe`, with analogous
@@ -182,3 +184,11 @@ library, including `vkCreateInstance`, both proc-address functions,
 PS5 driver and both Venus ELFs. The compiled driver contains the default
 `/system_tmp/ps5wl-gpu-0` string. These checks establish build/ABI and masking
 only; they are not a Venus rendering or console-execution result.
+
+The GPU server's concurrent-host-cube test exposed a startup collision on
+the original fixed TCP log port before Vulkan initialisation. Host cube and
+readback variants now pass port 0, and the shared logger binds that as an
+OS-selected ephemeral port. All production PS5 callers retain explicit
+ports. `env/run common/ps5log/test/run` passes the existing logger suite plus
+a regression starting two port-zero logger processes simultaneously.
+Host and PS5 Venus client rebuilds both exited 0 after this correction.

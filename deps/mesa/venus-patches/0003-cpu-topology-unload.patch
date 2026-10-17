@@ -1,0 +1,37 @@
+From: ps5wl contributors
+Subject: [PATCH] util: release CPU topology masks when the ICD unloads
+
+get_cpu_topology allocates the L3 affinity masks once. CPU caps publication
+copies the pointer into _util_cpu_caps_state.caps, so these are aliases, not
+two owning allocations. Release once at library unload and clear both.
+
+--- a/src/util/u_cpu_detect.c
++++ b/src/util/u_cpu_detect.c
+@@ -42,6 +42,7 @@
+ #include "c11/threads.h"
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <inttypes.h>
+ 
+ #if DETECT_ARCH_PPC
+@@ -114,6 +115,19 @@
+    .once_flag = ONCE_FLAG_INIT,
+    .detect_done = 0,
+ };
++
++#if defined(__GNUC__) && !DETECT_OS_WINDOWS
++static void __attribute__((destructor))
++util_cpu_caps_cleanup(void)
++{
++   /* caps is a shallow published copy of util_cpu_caps. Free only once. */
++   free(util_cpu_caps.L3_affinity_mask);
++   util_cpu_caps.L3_affinity_mask = NULL;
++   util_cpu_caps.num_L3_caches = 0;
++   _util_cpu_caps_state.caps.L3_affinity_mask = NULL;
++   _util_cpu_caps_state.caps.num_L3_caches = 0;
++}
++#endif
+ 
+ #if DETECT_ARCH_X86 || DETECT_ARCH_X86_64
+ static int has_cpuid(void);

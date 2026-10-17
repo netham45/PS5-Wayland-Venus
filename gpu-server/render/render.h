@@ -3,6 +3,7 @@
 #include <stdbool.h>
 /* PS5WL_RENDER_TRANSPORT=stream (default) or seqpacket, read at start. */
 int gpud_render_start(const char *path);
-/* Stops listeners and joins all connection/context threads before returning. */
-void gpud_render_stop(void);
+void gpud_render_shutdown(void);
+/* Call after shutdown; -EBUSY retains all still-live threads/mappings. */
+int gpud_render_drain(unsigned drain_ms);
 #endif

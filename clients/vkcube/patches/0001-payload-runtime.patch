@@ -107,7 +107,7 @@
  #elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__QNX__) || defined(__GNU__)
  int main(int argc, char **argv) {
      struct demo demo;
-+    if (ps5wl_client_init("ps5wl-vkcube", 9590) || ps5wl_vulkan_install()) {
++    if (ps5wl_client_init("ps5wl-vkcube", PS5WL_VKCUBE_LOG_PORT) || ps5wl_vulkan_install()) {
 +        ps5log("FAIL initializing Vulkan client runtime");
 +        ps5log_flush_wait(30000);
 +        return 1;

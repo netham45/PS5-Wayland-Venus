@@ -30,6 +30,11 @@ if [[ $MODE == ps5 ]]; then
         echo "Missing PS5 cross/native file; run make deps-ps5 (cross/setup.sh generates these files)." >&2
         exit 1
     fi
+    if [[ ${PS5WL_VIDEOOUT_ONLY:-false} != true &&
+          ! -f "$PREFIX/lib/pkgconfig/ps5wl-gpud.pc" ]]; then
+        echo "Missing PS5 GPU server; run env/run python3 gpu-server/build.py ps5 first." >&2
+        exit 1
+    fi
     source "$ROOT/toolchain/env.sh"
     "$ROOT/cross/bootstrap-compat.sh"
     cross_signature=$(sha256sum "$ROOT/build/ps5/cross.ini" "$ROOT/build/ps5/native.ini" \

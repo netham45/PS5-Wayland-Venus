@@ -11,7 +11,7 @@
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2 && ATOMIC_LONG_LOCK_FREE == 2,
  "watchdog and fatal handlers require lock-free atomics");
 static _Atomic int video = -1;
-static _Atomic long heartbeat, deadline;
+static _Atomic long heartbeat, deadline, grace_until;
 static atomic_bool armed;
 static atomic_bool foreground_owned;
 static unsigned char signal_stacks[3][65536];
@@ -49,10 +49,11 @@ static void *watchdog(void *unused) {
   struct timespec pause = { .tv_nsec = 100000000 }; nanosleep(&pause, NULL);
   if (!atomic_load_explicit(&armed, memory_order_relaxed)) continue;
   long now = milliseconds(), end = atomic_load_explicit(&deadline, memory_order_relaxed);
+  if (now < atomic_load_explicit(&grace_until, memory_order_relaxed)) continue;
   int stalled = now - atomic_load_explicit(&heartbeat, memory_order_relaxed) > 3000;
   if (!stalled && (!end || now < end)) continue;
   static const char stall[] = "ps5wl WATCHDOG main-loop heartbeat stalled >3s; closing VideoOut\n";
-  static const char limit[] = "ps5wl WATCHDOG validation hard deadline; closing VideoOut\n";
+  static const char limit[] = "ps5wl WATCHDOG phase/validation hard deadline; closing VideoOut\n";
   ps5log_emergency_write(stalled ? stall : limit, stalled ? sizeof(stall)-1 : sizeof(limit)-1);
   close_video(); ps5_process_exit(stalled ? 124 : 0);
  }
@@ -76,9 +77,17 @@ int ps5_safety_init(struct wl_event_loop *loop) {
  pthread_detach(thread); wl_event_source_timer_update(heartbeat_timer, 100);
  return 0;
 }
+void ps5_safety_grace(unsigned timeout_ms) {
+ long end = milliseconds() + timeout_ms;
+ atomic_store(&grace_until, end);
+ atomic_store(&deadline, end);
+ atomic_store(&armed, true);
+}
 void ps5_safety_video(int handle) {
  atomic_store(&heartbeat, milliseconds());
- if (PS5WL_TEST_SECONDS > 0) atomic_store(&deadline, milliseconds() + (PS5WL_TEST_SECONDS + 3) * 1000L);
+ atomic_store(&deadline, PS5WL_TEST_SECONDS > 0 ?
+  milliseconds() + (PS5WL_TEST_SECONDS + 3) * 1000L : 0);
+ atomic_store(&grace_until, 0);
  atomic_store(&video, handle); atomic_store(&armed, true);
 }
 void ps5_safety_close(void) { close_video(); }

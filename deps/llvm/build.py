@@ -24,7 +24,7 @@ def run(args):
 def prepare():
     archive = mesa.fetch('llvm')
     recipe = mesa.source('pacbrew-mesa') / 'llvm'
-    patches = sorted(recipe.glob('*.patch'))
+    patches = sorted(recipe.glob('*.patch')) + sorted((ROOT / 'deps/llvm/patches').glob('*.patch'))
     digest = hashlib.sha256(archive.read_bytes() + b''.join(p.read_bytes() for p in patches)).hexdigest()
     src = BASE / 'sources' / mesa.PINS['llvm']['source_dir']
     stamp = src / '.ps5wl-source'
@@ -48,12 +48,13 @@ def build(target, src):
         '-DLLVM_TARGETS_TO_BUILD=X86', '-DLLVM_ENABLE_PROJECTS=',
         '-DLLVM_BUILD_LLVM_DYLIB=OFF', '-DLLVM_LINK_LLVM_DYLIB=OFF',
         '-DLLVM_ENABLE_PLUGINS=OFF', '-DLLVM_ENABLE_BACKTRACES=OFF',
-        '-DLLVM_ENABLE_LIBXML2=OFF', '-DLLVM_ENABLE_ZLIB=OFF', '-DLLVM_ENABLE_ZSTD=OFF',
+        '-DLLVM_ENABLE_LIBXML2=OFF', '-DLLVM_ENABLE_ZLIB=OFF',
         '-DLLVM_ENABLE_TERMINFO=OFF', '-DLLVM_ENABLE_LIBEDIT=OFF',
         '-DLLVM_INCLUDE_TESTS=OFF', '-DLLVM_INCLUDE_EXAMPLES=OFF',
         '-DLLVM_INCLUDE_BENCHMARKS=OFF', '-DLLVM_BUILD_TOOLS=OFF',
         '-DLLVM_ENABLE_RTTI=OFF', '-DLLVM_ENABLE_EH=OFF',
         '-DLLVM_ENABLE_BINDINGS=OFF', '-DLLVM_INCLUDE_UTILS=OFF',
+        '-DLLVM_TOOL_LTO_BUILD=OFF', '-DLLVM_TOOL_REMARKS_BUILD=OFF',
         '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++',
     ]
     if target == 'ps5':
@@ -64,7 +65,8 @@ def build(target, src):
             '-DLLVM_NATIVE_TOOL_DIR=' + str(BASE / 'host/bin'),
             '-DLLVM_ENABLE_PIC=ON', '-DLLVM_ENABLE_THREADS=ON',
         ]
-    run(['cmake', '-G', 'Ninja', '-S', src / 'llvm', '-B', binary] + options)
+    fresh = [] if (binary / 'build.ninja').exists() else ['--fresh']
+    run(['cmake'] + fresh + ['-G', 'Ninja', '-S', src / 'llvm', '-B', binary] + options)
     if target == 'host':
         run(['cmake', '--build', binary, '--target', 'llvm-tblgen', 'llvm-config', '-j', mesa.JOBS])
     run(['cmake', '--build', binary, '-j', mesa.JOBS])

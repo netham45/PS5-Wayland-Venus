@@ -2,6 +2,8 @@
 #include "wire.h"
 #include "gpud_core.h"
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -11,10 +13,14 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <time.h>
 
 #define VENUS_CAPSET 4u
 #define TIMELINE_BYTES 16384u
+_Static_assert(sizeof(atomic_uint) == 4 && ATOMIC_INT_LOCK_FREE == 2,
+               "render timelines require lock-free shared 32-bit atomics");
 #define MAX_CONTEXTS_PER_CLIENT 64u
+struct resource { struct resource *next; uint32_t id; };
 struct context {
     struct context *next;
     pthread_t thread;
@@ -22,6 +28,7 @@ struct context {
     uint32_t guest_id, core_id;
     char name[33];
     atomic_uint *timelines;
+    struct resource *resources;
     size_t timeline_size;
 };
 struct client {
@@ -37,9 +44,11 @@ static struct {
     pthread_t accept_thread;
     struct client *clients;
     int listener;
+    int wake[2];
     bool running, stream;
+    atomic_bool accept_done;
     char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
-} server = { .lock = PTHREAD_MUTEX_INITIALIZER, .listener = -1 };
+} server = { .lock = PTHREAD_MUTEX_INITIALIZER, .listener = -1, .wake = { -1, -1 } };
 
 static void retire(void *opaque, uint32_t ring, uint64_t fence)
 {
@@ -86,12 +95,21 @@ static bool context_dispatch(struct context *ctx)
             if (n != sizeof(req.create_resource) || !req.create_resource.res_id ||
                 !req.create_resource.blob_size || req.create_resource.blob_size > UINT64_MAX - 16383 ||
                 (req.create_resource.blob_flags & ~1u)) break;
+            struct resource *record = ctx->resources;
+            while (record && record->id != req.create_resource.res_id) record = record->next;
+            if (record) break; /* upstream asserts on duplicate resource IDs */
+            record = malloc(sizeof(*record));
+            if (!record) break;
             struct render_context_op_create_resource_reply reply = { .fd_type = VIRGL_RESOURCE_FD_INVALID };
             uint64_t size = (req.create_resource.blob_size + 16383) & ~UINT64_C(16383);
             int fd = gpud_core_blob(ctx->core_id, req.create_resource.res_id,
                                    req.create_resource.blob_id, size,
                                    req.create_resource.blob_flags, &reply.map_info);
-            if (fd >= 0) reply.fd_type = VIRGL_RESOURCE_FD_SHM;
+            if (fd >= 0) {
+                reply.fd_type = VIRGL_RESOURCE_FD_SHM;
+                *record = (struct resource){ ctx->resources, req.create_resource.res_id };
+                ctx->resources = record;
+            } else free(record);
             ok = gpud_wire_send(&ctx->wire, &reply, sizeof(reply), fd >= 0 ? &fd : NULL, fd >= 0);
             if (fd >= 0) close(fd);
             break;
@@ -99,11 +117,14 @@ static bool context_dispatch(struct context *ctx)
         case RENDER_CONTEXT_OP_DESTROY_RESOURCE:
             if (n != sizeof(req.destroy_resource)) break;
             gpud_core_unref(ctx->core_id, req.destroy_resource.res_id);
+            struct resource **link = &ctx->resources;
+            while (*link && (*link)->id != req.destroy_resource.res_id) link = &(*link)->next;
+            if (*link) { struct resource *old = *link; *link = old->next; free(old); }
             ok = true;
             break;
         case RENDER_CONTEXT_OP_SUBMIT_FENCE:
             if (n != sizeof(req.submit_fence) || (req.submit_fence.flags & ~1u) ||
-                req.submit_fence.ring_index >= ctx->timeline_size / sizeof(atomic_uint)) break;
+                req.submit_fence.ring_index >= 64) break;
             ok = gpud_core_fence(ctx->core_id, req.submit_fence.flags,
                                  req.submit_fence.ring_index, req.submit_fence.seqno);
             break;
@@ -141,6 +162,11 @@ static void *context_run(void *arg)
     while (context_dispatch(ctx)) {}
     if (ctx->core_id) gpud_core_context_destroy(ctx->core_id);
     if (ctx->timelines) munmap(ctx->timelines, ctx->timeline_size);
+    while (ctx->resources) {
+        struct resource *next = ctx->resources->next;
+        free(ctx->resources);
+        ctx->resources = next;
+    }
     shutdown(ctx->wire.fd, SHUT_RDWR);
     return NULL;
 }
@@ -260,8 +286,19 @@ static void *accept_run(void *unused)
 {
     (void)unused;
     for (;;) {
+        struct pollfd ready[2] = {
+            { .fd = server.listener, .events = POLLIN },
+            { .fd = server.wake[0], .events = POLLIN },
+        };
+        int result = poll(ready, 2, -1);
+        if (result < 0) { if (errno == EINTR) continue; break; }
+        if (ready[1].revents || (ready[0].revents & (POLLERR | POLLHUP | POLLNVAL))) break;
+        if (!(ready[0].revents & POLLIN)) continue;
         int fd = accept(server.listener, NULL, NULL);
-        if (fd < 0) { if (errno == EINTR) continue; break; }
+        if (fd < 0) { if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue; break; }
+        /* BSD may inherit O_NONBLOCK; context/control sockets must block. */
+        int flags = fcntl(fd, F_GETFL);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK)) { close(fd); continue; }
         struct client *client = calloc(1, sizeof(*client));
         if (!client || gpud_wire_cloexec(fd)) { free(client); close(fd); continue; }
         client->wire = (struct gpud_wire){ fd, server.stream };
@@ -278,6 +315,7 @@ static void *accept_run(void *unused)
         server.clients = client;
         pthread_mutex_unlock(&server.lock);
     }
+    atomic_store(&server.accept_done, true);
     return NULL;
 }
 
@@ -296,25 +334,69 @@ int gpud_render_start(const char *path)
         int error = errno; close(fd); return -error;
     }
     if (listen(fd, 16)) { int error = errno; close(fd); unlink(path); return -error; }
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) || pipe(server.wake)) {
+        int error = errno; close(fd); unlink(path); return -error;
+    }
+    flags = fcntl(server.wake[1], F_GETFL);
+    if (flags < 0 || fcntl(server.wake[1], F_SETFL, flags | O_NONBLOCK) ||
+        gpud_wire_cloexec(server.wake[0]) || gpud_wire_cloexec(server.wake[1])) {
+        int error = errno;
+        close(server.wake[0]); close(server.wake[1]);
+        server.wake[0] = server.wake[1] = -1;
+        close(fd); unlink(path); return -error;
+    }
     server.listener = fd;
     strcpy(server.path, path);
     server.running = true;
+    atomic_init(&server.accept_done, false);
     int error = pthread_create(&server.accept_thread, NULL, accept_run, NULL);
-    if (error) { close(fd); unlink(path); server.listener = -1; server.running = false; return -error; }
+    if (error) {
+        close(fd); unlink(path);
+        close(server.wake[0]); close(server.wake[1]);
+        server.wake[0] = server.wake[1] = -1;
+        server.listener = -1; server.running = false; return -error;
+    }
     return 0;
 }
 
-void gpud_render_stop(void)
+void gpud_render_shutdown(void)
 {
     if (server.listener < 0) return;
     pthread_mutex_lock(&server.lock);
     server.running = false;
-    shutdown(server.listener, SHUT_RDWR);
+    char byte = 1;
+    ssize_t written;
+    do { written = write(server.wake[1], &byte, 1); } while (written < 0 && errno == EINTR);
+    /* EAGAIN means a prior shutdown already queued a wake byte. */
     for (struct client *c = server.clients; c; c = c->next) shutdown(c->wire.fd, SHUT_RDWR);
     pthread_mutex_unlock(&server.lock);
+}
+
+int gpud_render_drain(unsigned drain_ms)
+{
+    if (server.listener < 0) return 0;
+    struct timespec start, now, pause = { .tv_nsec = 1000000 };
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        bool done = atomic_load(&server.accept_done);
+        pthread_mutex_lock(&server.lock);
+        for (struct client *c = server.clients; c; c = c->next)
+            done = done && atomic_load(&c->done);
+        pthread_mutex_unlock(&server.lock);
+        if (done) break;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        int64_t elapsed = (int64_t)(now.tv_sec - start.tv_sec) * 1000 +
+                          (now.tv_nsec - start.tv_nsec) / 1000000;
+        if (elapsed >= drain_ms) return -EBUSY;
+        nanosleep(&pause, NULL);
+    }
     pthread_join(server.accept_thread, NULL);
     close(server.listener);
+    close(server.wake[0]); close(server.wake[1]);
+    server.wake[0] = server.wake[1] = -1;
     server.listener = -1;
     reap_clients(true);
     unlink(server.path);
+    return 0;
 }

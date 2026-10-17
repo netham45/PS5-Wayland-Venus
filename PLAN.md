@@ -119,9 +119,10 @@ build/, .sdk/                      generated, git-ignored
 - `PS5_HOST` defaults to `192.168.3.211`, `PLDMGR_PORT` to `8084`.
 - Log pull: `common/ps5log` exposes
   `int ps5log_init(const char *name, uint16_t port); void ps5log(const char *fmt, ...);`
-  It listens on `port` (default 9530; one port per concurrently running
-  payload), keeps a ring buffer of early lines, and streams buffered + live
-  lines to every connected client. Also mirrors to stderr/klog. Ring: 256
+  It listens on the explicit `port` (9530 for the compositor; 0 requests an
+  ephemeral OS-selected port for host clients), keeps a ring buffer of early
+  lines, and streams buffered + live lines to every connected client. Also
+  mirrors to stderr/klog. Ring: 256
   lines of up to 1024 bytes; up to 16 concurrent nonblocking clients; a client
   overtaken by ring wrap is disconnected. `ps5log_flush_wait(int ms)` lingers
   the full duration so late pulls still get the backlog.

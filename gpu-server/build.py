@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 
@@ -26,14 +27,21 @@ def main():
     if hashlib.sha256(archive.read_bytes()).hexdigest() != pin['sha256']:
         raise RuntimeError('virglrenderer archive checksum mismatch')
     src = BASE/'sources'/pin['source_dir']
+    patches = sorted((ROOT/'gpu-server/core/patches').glob('*.patch'))
+    digest = hashlib.sha256(b''.join(x.read_bytes() for x in patches)).hexdigest()
+    stamp = src/'.ps5wl-patches'
+    if src.exists() and (not stamp.exists() or stamp.read_text() != digest):
+        shutil.rmtree(src)
     if not src.exists():
         src.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive) as t:
             t.extractall(src.parent, filter='data')
-        for patch in sorted((ROOT/'gpu-server/core/patches').glob('*.patch')):
+        for patch in patches:
             subprocess.run(['patch','-p1','-i',str(patch)], cwd=src, check=True)
+        stamp.write_text(digest)
     build = BASE/(a.target + ('-sanitize' if a.sanitize else ''))
-    options = ['-Dvkr_source='+str(src), '--prefix='+str(BASE/a.target/'install')]
+    prefix = ROOT/'build/ps5/sysroot' if a.target == 'ps5' else build/'install'
+    options = ['-Dvkr_source='+str(src), '--prefix='+str(prefix)]
     if a.sanitize:
         options += ['-Db_sanitize=address,undefined','-Db_lundef=false']
     if a.target == 'ps5':

@@ -88,7 +88,8 @@ ssize_t gpud_wire_recv(struct gpud_wire *w, void *data, size_t capacity,
 {
     *count = 0;
     uint8_t header[4];
-    size_t expected = w->stream ? sizeof(header) : capacity;
+    /* Reading only byte zero prevents coalescing from hiding misplaced rights. */
+    size_t expected = w->stream ? 1 : capacity;
     void *dest = w->stream ? (void *)header : data;
     ssize_t n = receive_piece(w->fd, dest, expected, fds, count, true);
     if (n < 0) goto fail;

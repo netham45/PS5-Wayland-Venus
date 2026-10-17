@@ -32,6 +32,8 @@ def main():
     radv = [OUT / 'radv.o', '-lSceAgc', '-lSceAgcDriver']
     run(common + c1 + ['-DPROBE_APP'] + radv +
         ['-o', OUT / 'ps5wl-gpu-c1-app.elf'])
+    run(common + c1 + ['-DPROBE_APP', '-DPROBE_C1_REMAINING'] + radv +
+        ['-o', OUT / 'ps5wl-gpu-c1-remaining.elf'])
     gpu = [ROOT / 'gpu-server/probes/gpu.c']
     run(common + gpu + ['-DPROBE_VERIFY', '-o', OUT / 'ps5wl-gpu-c2-verify.elf'])
     for size in (16384, 8 << 20, 64 << 20):

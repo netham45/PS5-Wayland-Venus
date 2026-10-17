@@ -80,7 +80,7 @@ def build(target):
         '-Dvalgrind=disabled', '-Dlibunwind=disabled', '-Dzstd=disabled',
         '-Dzlib=disabled', '-Dexpat=disabled', '-Dxmlconfig=disabled',
         '-Dbuild-tests=false', '-Dvulkan-layers=', '-Dvideo-codecs=',
-        '-Dshader-cache=disabled', '-Dmesa-clc=disabled',
+        '-Dshader-cache=disabled', '-Dmesa-clc=auto',
     ]
     if target == 'ps5':
         cross = mesa.BASE / 'ps5-lavapipe-llvm.ini'

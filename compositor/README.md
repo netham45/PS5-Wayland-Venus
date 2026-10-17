@@ -47,12 +47,16 @@ The PNG readback encoder has a separate host regression test:
 
 ```sh
 make deps-ps5
+env/run python3 gpu-server/build.py ps5
 make compositor-ps5
 ```
 
-The PS5 build requires `build/ps5/sysroot/lib/pkgconfig/wlroots-0.20.pc` and
-`build/ps5/cross.ini`, produced by the PS5 dependency build. It uses the SDK
-prospero compiler/cross configuration and static dependency linking, producing
+The PS5 build requires `build/ps5/sysroot/lib/pkgconfig/wlroots-0.20.pc`,
+`build/ps5/sysroot/lib/pkgconfig/ps5wl-gpud.pc` and `build/ps5/cross.ini`.
+The dependency build produces wlroots/cross configuration; the GPU-server build
+installs the in-process GPU daemon archive and package metadata.
+The PS5 build uses the SDK prospero compiler/cross configuration and static
+dependency linking, producing
 `build/ps5/compositor/ps5wl`. Missing dependencies fail with the required next
 command, not by falling back to host packages. PS5 selects the custom VideoOut
 backend automatically, logs on TCP 9530, and listens on `/system_tmp/wayland-0`.
@@ -65,6 +69,17 @@ no console XKB files or shell are required. New PS5 windows are maximized to
 1920x1080. Keyboard/mouse and DualSense poll at 250 Hz. Left stick/touchpad moves
 the pointer, Cross/R2 and Circle/L2 click, right stick scrolls, and Options
 cycles focus. Ctrl+Alt+Backspace or Options+Create (Share) requests clean shutdown.
+
+Regular PS5 builds start the in-process GPU server before creating the VideoOut
+backend or Wayland socket. It uses the GPU-server defaults (128 MiB of host
+memory per context, at most two contexts); pixman remains the compositor
+renderer. Shutdown drains the GPU server for up to five seconds before backend
+teardown. A busy drain retains GPU mappings until native application exit.
+GPU startup and shutdown have bounded 30-second/eight-second watchdog phases;
+arming VideoOut restores the ordinary three-second heartbeat. The isolated
+`PS5WL_VIDEOOUT_ONLY=true` build does not link or start the GPU server.
+Hardware Vulkan acceptance is gated by `../gpu-server/PLAN.md`; linking this
+library alone does not establish successful Vulkan client presentation.
 
 For unattended hardware validation, build with
 `PS5WL_TEST_SECONDS=60 make compositor-ps5` (accepted range 0–90, default 0).

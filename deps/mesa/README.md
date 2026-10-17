@@ -125,3 +125,30 @@ neither error nor assertion is suppressed.
 
 Hardware and host acceptance results belong in `clients/vkcube/README.md`;
 none are implied by this design description.
+
+## ICD unload regression
+
+The Venus-host lavapipe stand-in also applies
+`venus-patches/0003-cpu-topology-unload.patch`. Mesa's CPU topology discovery
+allocates L3 affinity masks once and publishes a shallow copy of the owning
+pointer. The ICD destructor releases that allocation once and clears both
+aliases; otherwise unloading the driver loses it. No preload or leak
+suppression is used.
+
+Exercise real physical-device enumeration and four unload/reload cycles:
+
+```
+env/run clang -g -fsanitize=address -Ibuild/mesa/sources/mesa-26.2.0-venus/include \
+  deps/mesa/tests/driver-unload.c -ldl -o build/host/mesa-driver-unload
+env/run env LD_LIBRARY_PATH="$PWD/build/host/sysroot/lib" \
+  ASAN_OPTIONS=detect_leaks=1 PS5WL_NO_EXTERNAL_FD=true \
+  build/host/mesa-driver-unload "$PWD/build/host/venus/lib/libvulkan_lvp.so"
+```
+
+The test deliberately calls `dlclose`, so retaining the library until process
+exit cannot conceal an ICD-owned leak.
+
+Observed after this patch: all four cycles enumerated one physical device
+and the ASan/LeakSanitizer process exited 0 with `detect_leaks=1`, without
+preloading the ICD or suppressing leaks. Host and PS5 Venus drivers and the
+PS5 client payloads were rebuilt successfully with the cleanup applied.

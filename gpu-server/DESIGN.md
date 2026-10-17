@@ -1,9 +1,10 @@
 # Venus/vtest research — draft, not a plan
 
-**Status: implementation stopped by coordinator instruction. This is research
-and an inventory of unreviewed experiments, not an approved architecture,
-implementation plan, or completed GPU server.** No Venus client has presented a
-frame in this investigation. No PS5 build or console run was performed here.
+**Historical research record.** The original investigation below stopped before
+any Venus presentation or PS5 build. Its frozen experiments now live under
+`venus-research/`; they are not the live server. The approved architecture is
+`PLAN.md`, and the in-process G1 implementation is described at the end of this
+document.
 
 ## Finding and feasibility boundary
 
@@ -362,3 +363,62 @@ remain under `build/gpu-server/`. They are disposable research state, not
 additional checked-in source pins. No compositor integration, public server
 API or PS5 service binary was implemented. The coordinator requested a separate
 proper plan/review pass; this document deliberately does not prescribe one.
+
+## Approved G1 implementation
+
+The live build is `env/run python3 gpu-server/build.py host` (or `host
+--sanitize`). It verifies the pinned virglrenderer archive and applies
+`core/patches/0001-in-process-host-memory.patch` to a private generated tree
+under `build/gpud/sources/`. Patch changes invalidate that generated source
+cache. `meson.build` compiles vkr and its small Mesa utility dependencies
+directly: no vrend, libepoxy, proxy, upstream vtest server, render-server binary,
+fork or exec path is linked.
+
+`include/ps5wl_gpud.h` is the compositor boundary. The front ends share the
+renderer registry, while every accepted vtest connection has its own thread.
+Listening sockets are nonblocking and a private wake pipe stops each accept
+loop without relying on shutdown of a listening socket. vtest implements only
+the approved Venus v4 commands; other commands or malformed lengths disconnect
+that client. The actual pinned protocol has MAX_TIMELINE_COUNT=1 and
+HAS_TIMELINE_SYNCOBJ=2; there is no HOST_COHERENT_DMABUF_BLOB enum in that pin.
+The server returns zero/unsupported for unrecognised parameters and advertises
+64 pipe-backed timelines, not DRM syncobjs.
+
+Host-visible allocations import server-created ordinary shared pages, rounded
+to at least 16 KiB and aligned to the host import requirement. A temporary
+logical-device query determines the importable memory-type mask before memory
+properties are advertised. Both base memory-properties replies and Properties2
+replies use that same mask. The memory-mask unit test includes a fake second
+host-visible type that is not importable. Device-memory blob exports carry SHM,
+never a fabricated dma-buf. Each exported resource owns a separate server
+mapping, so its lifetime is independent of vkFreeMemory; the Vulkan allocation
+owns the imported mapping and SHM descriptor until Vulkan memory destruction.
+Actual Vulkan fd-export call sites are counted in the shutdown log.
+
+Every sync wait owns a fresh pipe pair. Callback signalling and timeout handling
+write at most one byte, retaining the server read end until after the write so
+a dead client cannot raise SIGPIPE in the compositor. Asynchronous fence
+callbacks do not hold the shared core registry lock across front-end code.
+Shutdown disconnects both front ends and shares one caller-specified drain
+deadline; timeout returns -EBUSY without finalizing vkr or freeing live mappings.
+
+`env/run gpu-server/tests/vtest-cube --sanitize` orchestrates the private
+headless compositor, an independent **test host process with an embedded gpud**
+(threads only), and Venus cube clients using the host no-external-fd lavapipe
+variant from `deps/mesa`. It requires 120 Wayland shm presents, two concurrent
+clients, pipe/sync protocol regressions, malformed-client/stalled-peer
+isolation, zero measured Vulkan fd exports, and SHM fd/mapping counts returning
+to baseline after a killed client. Logs are retained under
+`build/gpud/logs/{host,sanitize}`; no console action occurs in this harness.
+
+PS5 compile/link uses `env/run python3 gpu-server/build.py ps5`, including the
+repository `cross/bin/prospero-clang` compatibility wrappers. The static archive,
+header and `lib/pkgconfig/ps5wl-gpud.pc` install in `build/ps5/sysroot`.
+PS5 logger messages use the compositor's ps5log path. Following the C1 measured
+409 MiB flexible-memory baseline, PS5 zero-config defaults are **128 MiB of host
+memory per context and two contexts** (256 MiB total GPU SHM ceiling, excluding
+driver/compositor metadata); host defaults remain 512 MiB and 32 contexts.
+Device-memory defaults are 1 GiB per context. Allocation accounting includes
+blob-zero transport SHM, and Vulkan object creation has a 65,536-object limit.
+These host/build results do not establish PS5 shared-memory GPU import or
+coherence; those remain subject to the console experiment gates in PLAN.md.

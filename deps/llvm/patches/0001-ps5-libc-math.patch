@@ -1,0 +1,22 @@
+From: ps5wl contributors
+Subject: [PATCH] Support: PS5 SDK provides math through the default libc link
+
+The SDK has no libm archive. Adding -lm before feature probes makes every
+otherwise successful header/function check fail at link time. Keep the SDK
+libc link contract for PS5; retain normal libm linkage on other Unix targets.
+
+--- a/llvm/cmake/config-ix.cmake
++++ b/llvm/cmake/config-ix.cmake
+@@ -17,4 +17,4 @@
+-if( UNIX AND NOT (APPLE OR BEOS OR HAIKU) )
++if( UNIX AND NOT (APPLE OR BEOS OR HAIKU OR PS5) )
+   # Used by check_symbol_exists:
+   list(APPEND CMAKE_REQUIRED_LIBRARIES "m")
+ endif()
+--- a/llvm/lib/Support/CMakeLists.txt
++++ b/llvm/lib/Support/CMakeLists.txt
+@@ -54,3 +54,3 @@
+-  if( UNIX AND NOT (BEOS OR HAIKU) )
++  if( UNIX AND NOT (BEOS OR HAIKU OR PS5) )
+     set(system_libs ${system_libs} m)
+   endif()

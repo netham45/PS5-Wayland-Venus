@@ -108,9 +108,13 @@ enumerates all 2,073,600 scanout pixels, proves unique addresses, and measures
 maximum byte end 8,830,976, below both SDL's extent and each 10 MiB allocation.
 This rules out an ordinary out-of-bounds CPU tile write, not a VideoOut fault.
 
-`safety.c` installs alternate-stack fatal handlers and an independent watchdog:
-3 seconds without a main-loop heartbeat or the validation hard deadline closes
-VideoOut and exits. Fatal text is sent without allocation or locks to stderr
+`safety.c` installs alternate-stack fatal handlers and an independent watchdog.
+Normal rendering closes VideoOut and exits after three seconds without a
+main-loop heartbeat or at the validation hard deadline. In-process GPU-server
+startup instead has a bounded 30-second phase, and shutdown an eight-second
+phase around its five-second drain; VideoOut activation clears the startup
+deadline and restores ordinary heartbeat/validation monitoring. Fatal text is
+sent without allocation or locks to stderr
 and connected nonblocking log sockets. Normal teardown unregisters buffers,
 closes VideoOut, joins the bounded waiter, deletes the equeue, unmaps and releases
 memory, following the source presenters' close-before-equeue-delete order.
@@ -120,6 +124,16 @@ Owned foreground applications terminate through shipping SDL's
 entry point documents raw kernel exit raising SIGSYS. SIGSYS is also contained
 and logged. If LoadExec returns, its result is logged and the process waits for
 app-manager termination instead of executing the forbidden raw BigApp exit.
+
+Regular builds link `ps5wl-gpud` and start it before backend initialization and
+Wayland socket creation, using the PS5 defaults of 128 MiB host memory per
+context and two contexts. The compositor remains pixman-rendered; GPU-server
+startup failure is logged without disabling normal Wayland rendering. Shutdown
+stops accepting GPU work and drains before backend teardown. `-EBUSY` is logged
+without retrying destruction or freeing GPU mappings before native app exit.
+The isolated `VIDEOOUT_ONLY` path excludes the GPU server entirely. These
+integration paths require the console acceptance gates in `gpu-server/PLAN.md`;
+the installed normal preflight image described above predates this integration.
 
 Wayland library diagnostics are routed to the same TCP logger as wlroots, so
 protocol failures remain observable without payload stderr forwarding.

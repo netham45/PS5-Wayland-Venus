@@ -89,3 +89,23 @@ with (BUILD / "stderr.log").open("w+") as stderr:
         if server.poll() is None:
             server.terminate()
             server.wait(timeout=3)
+
+# Port zero must permit simultaneous independent client loggers. Mapping it to
+# a fixed default port makes the second process fail before client startup.
+with (BUILD / "ephemeral-stderr.log").open("w+") as stderr:
+    servers = []
+    try:
+        for _ in range(2):
+            server = subprocess.Popen([str(BUILD / "server"), "0"], stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=stderr, text=True)
+            servers.append(server)
+            assert server.stdout.readline() == "ready\n", "Port-zero logger failed to start"
+        assert all(server.poll() is None for server in servers)
+        print("PASS: two simultaneous port-zero loggers")
+    finally:
+        for server in servers:
+            if server.poll() is None:
+                server.terminate()
+            server.wait(timeout=3)
+            server.stdin.close()
+            server.stdout.close()

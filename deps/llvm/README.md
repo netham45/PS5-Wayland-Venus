@@ -20,6 +20,12 @@ assertions, its implicit-project text substitution, or its SDK-provided
 This build disables tools/projects explicitly and uses the repository compiler
 wrappers so the fd/flag compatibility archive is linked.
 
+The PS5-specific `0001-ps5-libc-math.patch` removes LLVM's unconditional `-lm`
+from feature probes and LLVMSupport on this SDK target only. The SDK supplies
+math through its default libc link and has no separate libm archive; the
+unmodified configure otherwise misreports headers/functions as missing because
+each probe fails to link `-lm`.
+
 The pinned Mesa 26.2.0 `meson.build:2039-2050` accepts LLVM >=8 for X86 MCJIT.
 ORCJIT requires >=15; this variant deliberately selects `llvm-orcjit=false` on
 both platforms. LLVM still builds its ORC support libraries, but lavapipe uses

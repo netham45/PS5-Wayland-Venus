@@ -78,6 +78,7 @@ void ps5_capture_destroy(struct ps5_capture *);
 void ps5_autostart(void);
 int ps5_safety_init(struct wl_event_loop *);
 int ps5_safety_thread_stack(unsigned);
+void ps5_safety_grace(unsigned timeout_ms);
 void ps5_safety_video(int);
 void ps5_safety_close(void);
 void ps5_safety_identify(void);

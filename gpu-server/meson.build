@@ -45,16 +45,29 @@ foreach name : ['bitscan', 'hash_table', 'os_file', 'os_misc', 'ralloc', 'u_cpu_
 endforeach
 sources += [src/'src/virgl_resource.c', src/'src/virgl_util.c']
 gen = custom_target('venus_objects', input: [src/'src/venus/vkr_device_object.py', src/'src/venus/vkr_device_object.json'], output: ['vkr_buffer_gen.h', 'vkr_command_buffer_gen.h', 'vkr_descriptor_set_gen.h', 'vkr_device_memory_gen.h', 'vkr_image_gen.h', 'vkr_pipeline_gen.h', 'vkr_query_pool_gen.h', 'vkr_queue_gen.h', 'vkr_render_pass_gen.h'], command: [find_program('python3'), '@INPUT0@', '-o', '@OUTDIR@', '@INPUT1@'])
-deps = [threads, cc.find_library('m')]
+deps = [threads]
 if host_machine.system() == 'linux'
-  deps += cc.find_library('dl')
+  deps += [cc.find_library('m'), cc.find_library('dl')]
+endif
+if meson.is_cross_build()
+  add_project_arguments('-DPS5WL_PS5=1', '-D__BSD_VISIBLE=1', language: 'c')
+  inc = [inc, include_directories('../common/ps5log')]
+  sources += '../common/ps5log/ps5log.c'
 endif
 lib = static_library('ps5wl-gpud', sources, gen, 'core/gpud.c', 'vtest/vtest.c', 'render/render.c', 'render/wire.c', include_directories: inc, dependencies: deps, install: true)
 gpud_dep = declare_dependency(link_with: lib, include_directories: include_directories('include'), dependencies: deps)
 install_headers('include/ps5wl_gpud.h')
 pkg = import('pkgconfig')
-pkg.generate(lib, name: 'ps5wl-gpud', description: 'In-process Venus GPU server', extra_cflags: ['-pthread'], libraries_private: ['-pthread', '-lm', '-ldl'])
+private_libs = ['-pthread']
+if host_machine.system() == 'linux'
+  private_libs += ['-lm', '-ldl']
+endif
+pkg.generate(lib, name: 'ps5wl-gpud', description: 'In-process Venus GPU server', extra_cflags: ['-pthread'], libraries_private: private_libs, install_dir: get_option('libdir') / 'pkgconfig')
 executable('gpud-host', 'tests/host.c', dependencies: gpud_dep, install: true)
-mask = executable('memory-mask', 'tests/memory-mask.c', include_directories: inc)
-test('memory-mask', mask)
-executable('render-client', 'render/client.c', 'render/wire.c', include_directories: inc, dependencies: gpud_dep)
+if not meson.is_cross_build()
+  mask = executable('memory-mask', 'tests/memory-mask.c', include_directories: inc)
+  test('memory-mask', mask)
+  executable('render-client', 'render/client.c', 'render/wire.c', include_directories: inc, dependencies: gpud_dep)
+  wire_test = executable('render-wire-test', 'render/wire-test.c', 'render/wire.c', include_directories: inc, dependencies: threads)
+  test('render-wire', wire_test)
+endif

@@ -123,7 +123,17 @@ int main(int argc, char **argv)
     };
     CHECK(gpud_wire_send(&ctx, &ci, sizeof(ci), &timeline_fd, 1)); /* no eventfd */
     close(timeline_fd);
-    int reply_fd = create_blob(&ctx, 1, 0, PAGE_BYTES);
+    /* A second supervisor reuses guest context id 17 but stalls before INIT.
+     * It must neither block this client nor keep shutdown waiting forever. */
+    struct gpud_wire stalled = { .fd = socket(AF_UNIX, client.stream ? SOCK_STREAM : SOCK_SEQPACKET, 0),
+                                 .stream = client.stream };
+    CHECK(stalled.fd >= 0 && connect(stalled.fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    send_plain(&stalled, &init, sizeof(init));
+    send_plain(&stalled, &create, sizeof(create));
+    CHECK(gpud_wire_recv(&stalled, &created, sizeof(created), fds, &count) == sizeof(created));
+    CHECK(created.ok && count == 1);
+    int stalled_ctx = fds[0];
+    int reply_fd = create_blob(&ctx, 1, 0, PAGE_BYTES - 1); /* tests 16-KiB rounding */
     unsigned char *reply = mmap(NULL, PAGE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, reply_fd, 0);
     CHECK(reply != MAP_FAILED); close(reply_fd);
     struct encoder e = {0};
@@ -136,6 +146,8 @@ int main(int argc, char **argv)
     u64(&e, 0); u64(&e, 1); u64(&e, 1);
     submit(&ctx, &e); fence(&ctx, timeline, 0, 1); result_ok(reply, 0);
     /* Enumerate one physical device and assign object id 2. */
+    /* More than 256 bytes exercises upstream's second-record overflow path. */
+    for (unsigned i = 0; i < 20; i++) seek_reply(&e);
     seek_reply(&e); command(&e, 2, true); u64(&e, 1); u64(&e, 1); u32(&e, 1); u64(&e, 1); u64(&e, 2);
     submit(&ctx, &e); fence(&ctx, timeline, 0, 2); result_ok(reply, 2);
     CHECK(load32(reply + 16) == 1 && load64(reply + 28) == 2);
@@ -159,11 +171,28 @@ int main(int argc, char **argv)
     submit(&ctx, &e); fence(&ctx, timeline, 0, 5); result_ok(reply, 21);
     int blob_fd = create_blob(&ctx, 2, 4, PAGE_BYTES);
     unsigned char *memory = mmap(NULL, PAGE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, blob_fd, 0);
-    CHECK(memory != MAP_FAILED); close(blob_fd);
+    CHECK(memory != MAP_FAILED);
     for (size_t i = 0; i < PAGE_BYTES; i++) memory[i] = (unsigned char)i;
     fence(&ctx, timeline, 0, 6);
     for (size_t i = 0; i < PAGE_BYTES; i++) CHECK(memory[i] == (unsigned char)i);
     /* Above validates shared host-pointer blob export, not GPU execution. */
+    command(&e, 22, false); u64(&e, 3); u64(&e, 4); u64(&e, 0);
+    submit(&ctx, &e); fence(&ctx, timeline, 0, 7);
+    /* The export and resource must outlive VkDeviceMemory's own host mapping. */
+    CHECK(munmap(memory, PAGE_BYTES) == 0);
+    memory = mmap(NULL, PAGE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, blob_fd, 0);
+    CHECK(memory != MAP_FAILED); close(blob_fd);
+    for (size_t i = 0; i < PAGE_BYTES; i++) CHECK(memory[i] == (unsigned char)i);
+    /* Make vkr WRITE through the retained resource alias after vkFreeMemory.
+     * Merely reading our client mapping would miss a dangling server alias. */
+    command(&e, 178, false); u64(&e, 1); u32(&e, 2); u64(&e, 0); u64(&e, PAGE_BYTES);
+    command(&e, 2, true); u64(&e, 1); u64(&e, 1); u32(&e, 0); u64(&e, 0);
+    submit(&ctx, &e); fence(&ctx, timeline, 0, 8);
+    result_ok(memory, 2); CHECK(load32(memory + 16) > 0);
+    command(&e, 178, false); u64(&e, 1); u32(&e, 1); u64(&e, 0); u64(&e, PAGE_BYTES);
+    command(&e, 12, false); u64(&e, 3); u64(&e, 0);
+    command(&e, 1, false); u64(&e, 1); u64(&e, 0);
+    submit(&ctx, &e); fence(&ctx, timeline, 0, 9);
     struct render_context_op_destroy_resource_request unref = { .header.op = RENDER_CONTEXT_OP_DESTROY_RESOURCE, .res_id = 2 };
     send_plain(&ctx, &unref, sizeof(unref));
     unref.res_id = 1; send_plain(&ctx, &unref, sizeof(unref));
@@ -172,8 +201,9 @@ int main(int argc, char **argv)
     send_plain(&client, &destroy, sizeof(destroy));
     close(client.fd);
     CHECK(ps5wl_gpud_stop(5000) == 0);
+    close(stalled_ctx); close(stalled.fd);
     munmap(memory, PAGE_BYTES); munmap(reply, PAGE_BYTES); munmap(timeline, PAGE_BYTES);
     CHECK(rmdir(dir) == 0);
-    printf("render %s: Venus instance/device, host-pointer SHM blob, timeline seqno=6 PASS\n", argv[1]);
+    printf("render %s: Venus instance/device, retained host-pointer SHM blob, timeline seqno=9 PASS\n", argv[1]);
     return 0;
 }

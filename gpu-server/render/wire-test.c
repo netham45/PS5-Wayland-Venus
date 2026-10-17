@@ -2,6 +2,7 @@
 #include "wire.h"
 #include <assert.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -39,9 +40,34 @@ static void *fragmented_writer(void *opaque)
     for (size_t i = 0; i < sizeof(bytes); i++) assert(send(fd, bytes + i, 1, 0) == 1);
     return NULL;
 }
+static void misplaced_rights(void)
+{
+    struct gpud_wire a, b; pair(&a, &b, true);
+    int p[2]; assert(pipe(p) == 0);
+    /* Rights on header byte two must fail even when all bytes are coalesced. */
+    assert(send(a.fd, "\004", 1, 0) == 1);
+    unsigned char bytes[] = { 0, 0, 0, 1, 2, 3, 4 };
+    struct iovec iov = { bytes, sizeof(bytes) };
+    union { struct cmsghdr align; char bytes[CMSG_SPACE(sizeof(int))]; } control;
+    memset(&control, 0, sizeof(control));
+    struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
+        .msg_control = control.bytes, .msg_controllen = sizeof(control) };
+    struct cmsghdr *c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS; c->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(c), &p[1], sizeof(int));
+    assert(sendmsg(a.fd, &msg, 0) == sizeof(bytes));
+    close(p[1]);
+    unsigned char data[8]; int fds[GPUD_RENDER_MAX_FDS]; unsigned count;
+    assert(gpud_wire_recv(&b, data, sizeof(data), fds, &count) == -1 && count == 0);
+    struct pollfd check = { .fd = p[0], .events = POLLIN };
+    assert(poll(&check, 1, 100) == 1);
+    assert(read(p[0], data, 1) == 0); /* proves the received writer was closed */
+    close(p[0]); close(a.fd); close(b.fd);
+}
 int main(void)
 {
     roundtrip(false); roundtrip(true);
+    misplaced_rights();
     struct gpud_wire a, b; pair(&a, &b, true);
     pthread_t writer; assert(pthread_create(&writer, NULL, fragmented_writer, &a.fd) == 0);
     unsigned char data[8]; int fds[GPUD_RENDER_MAX_FDS]; unsigned count;

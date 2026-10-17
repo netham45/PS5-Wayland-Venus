@@ -109,6 +109,43 @@ Payload Manager config/autoload or replace its payload. No new always-on service
 can survive reboot using only those already-running payloads without such a
 startup integration.
 
+## Isolated diagnostics without reinstalling
+
+The existing `--elf` mode above is an **installation test**: it replaces the
+installed compositor and refuses an existing resident installer. Do not use it
+to probe over the final interactive installation.
+
+After an explicit per-run console grant from the integration owner, use the
+separate mode for a bounded native diagnostic (body logs9530):
+
+```sh
+launcher/test.sh --diagnostic-elf /absolute/path/to/bounded-diagnostic.elf
+```
+
+This builds only `ps5wl-launch-diag.elf` through the canonical compiler proxy.
+The plain background driver embeds the requested ELF, stages it in a unique
+`/data/ps5wl/ps5wl-diagnostic-XXXXXX` file, and invokes the existing foreground-
+only `hbldr_launch` path. It removes the staging file after the loader copies
+the ELF. `/system_tmp` is intentionally not used for ELF storage: earlier
+hardware evidence found its tiny capacity unsuitable for Mesa-sized payloads.
+The driver refuses a running BigApp, just as the normal launcher does.
+
+This mode permits the installed resident launcher to remain alive and does not
+register/unregister the icon, rewrite compositor/demo/autostart files, rebuild
+clients, or signal any console process. The native body must supply its own
+bounded `LoadExec("exit",NULL)` lifecycle. For the authorized C1/C2b probes it
+must not open VideoOut, fork/rfork/vfork/spawn, or alter process GPU budgets.
+Those restrictions belong to the probe artifact; the generic driver does not
+claim to enforce arbitrary executable behavior.
+
+Driver logs9586 report the child PID, staging unlink result and final status.
+The driver observes disappearance for at most75 seconds; it never kills the
+child on timeout. The harness captures both body and driver logs, waits for
+driver EOF, and requires an explicit successful disappearance result. A closed
+log stream alone does not prove the diagnostic's native assertions passed.
+Failure requires coordinator-directed cleanup, not automatic retries. The
+harness cleans up only its own host log observer and temporary host log.
+
 ## Files and ports
 
 - `/user/app/PSWL00001/sce_sys/{param.json,icon0.png}`: browser icon registration.

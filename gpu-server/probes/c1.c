@@ -41,6 +41,7 @@ static void deadline(int signal_number) {
 }
 #endif
 
+#ifndef PROBE_C1_REMAINING
 static int flexible(const char *stage, size_t mapping) {
     size_t available = 0;
     int rc = sceKernelAvailableFlexibleMemorySize(&available);
@@ -83,6 +84,7 @@ static int shared_mapping(size_t bytes, int gpu) {
     if (bytes > 16384) failed |= flexible("released", bytes) != 0;
     return failed;
 }
+#endif
 
 #ifdef PROBE_APP
 static int direct_ladder(void) {
@@ -162,10 +164,15 @@ int main(void) {
         ps5log("STOP not foreground BigApp"); shell_exit();
     }
 #endif
+#ifdef PROBE_C1_REMAINING
+    ps5log("C1 authorized continuation: skip already measured flexible-memory stage");
+    int failed = 0;
+#else
     int failed = shared_mapping(16384, 1);
     const size_t sizes[] = {64u << 20, 256u << 20, 1024u << 20};
     for (unsigned i = 0; !failed && i < sizeof(sizes) / sizeof(sizes[0]); i++)
         failed = shared_mapping(sizes[i], 0);
+#endif
     if (!failed) {
         int pair[2];
         errno = 0;

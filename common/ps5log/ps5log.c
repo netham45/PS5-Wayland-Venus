@@ -158,7 +158,7 @@ int ps5log_init(const char *name, uint16_t port) {
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(port ? port : 9530);
+    address.sin_port = htons(port);
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0 ||
         nonblocking(fd) < 0 || bind(fd, (struct sockaddr *)&address, sizeof(address)) < 0 ||
         listen(fd, MAX_CLIENTS) < 0)
