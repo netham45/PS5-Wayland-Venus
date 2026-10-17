@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -46,6 +47,8 @@ def main():
                         help='128 MiB/context, two contexts, 1920x1080, 600 presents')
     parser.add_argument('--full-hd', action='store_true',
                         help='1920x1080, 600 presents with ordinary host quotas')
+    parser.add_argument('--sync-trace', action='store_true',
+                        help='Require queue-ring retirement and completed WSI trace stages')
     a = parser.parse_args()
     full_hd = a.full_hd or a.ps5_constraints
     if os.environ.get('PS5WL_BUILD_ENV') != '1':
@@ -53,6 +56,7 @@ def main():
     build = ROOT/'build/gpud'/('host-sanitize' if a.sanitize else 'host')
     mode = 'sanitize' if a.sanitize else 'host'
     mode += '-ps5' if a.ps5_constraints else '-full-hd' if full_hd else ''
+    if a.sync_trace: mode += '-trace'
     logs = ROOT/'build/gpud/logs'/mode
     logs.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(build/'memory-mask')], check=True)
@@ -65,6 +69,8 @@ def main():
                    LD_LIBRARY_PATH=str(ROOT/'build/host/sysroot/lib'),
                    PS5WL_NO_EXTERNAL_FD='true', ASAN_OPTIONS='abort_on_error=1:detect_leaks=1:fast_unwind_on_malloc=0',
                    UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+        if a.sync_trace:
+            env.update(VN_DEBUG='vtest,wsi', MESA_LOG_LEVEL='debug')
         # Neither executable creates a child: Python is the external orchestrator.
         with (logs/'compositor.log').open('w') as cl, (logs/'server.log').open('w') as sl:
             compositor = subprocess.Popen([str(ROOT/'build/host/compositor/ps5wl'), '-b','headless','-d',env['WAYLAND_DISPLAY']], env=env, stdout=cl, stderr=cl)
@@ -130,6 +136,21 @@ def main():
             raise RuntimeError(f'server={server.returncode} compositor={compositor.returncode}')
         for marker in ['host-pointer blob:', 'Vulkan fd-export calls=0']:
             if marker not in server_text: raise RuntimeError('missing server evidence '+marker)
+        if a.sync_trace:
+            key = r'ctx=(\d+) ring=([1-9]\d*) fence=(\d+)'
+            submitted = set(re.findall(r'sync-trace submit-begin '+key, server_text))
+            completed = set(re.findall(r'sync-trace wait-end '+key+r' result=0', server_text))
+            retired = set(re.findall(r'vtest sync-trace retire '+key, server_text))
+            if not submitted & completed & retired:
+                raise RuntimeError('missing completed nonzero queue-ring fence retirement chain')
+            if 'vtest sync-trace wait-ready' not in server_text:
+                raise RuntimeError('missing vtest wait-pipe completion trace')
+            single_text = (logs/'single.log').read_text()
+            for marker in ['sync-trace wsi-thread-start',
+                           'sync-trace wsi-fence-wait-end result=0',
+                           'sync-trace wsi-common-present-end result=0']:
+                if marker not in single_text:
+                    raise RuntimeError('missing completed client trace '+marker)
         dimensions = '1920x1080' if full_hd else '500x500'
         if 'Created shm allocator' not in compositor_text or f'client surface committed {dimensions} count={frames}' not in compositor_text:
             raise RuntimeError(f'missing {frames} compositor wl_shm commits at {dimensions}')

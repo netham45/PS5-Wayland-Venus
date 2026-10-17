@@ -218,3 +218,25 @@ client logs under `build/gpud/logs/quota`; no fake renderer or Vulkan calls are
 used. This checks error propagation, not that a full-HD lavapipe swapchain fits
 PS5's quota: lavapipe's single memory type charges optimal images as host memory,
 whereas RADV's nonimportable memory types are device-only.
+
+## Asynchronous WSI synchronization tracing
+
+`venus-patches/0008-sync-trace.patch` adds `VN_DEBUG=wsi` stage messages around
+the asynchronous present worker, its fence submit/wait, sync-fd wait and queue
+flush lock. On PS5 it also exports `ps5wl_venus_set_log_handler`; the diagnostic
+payload installs its existing ps5log sink before `vkCreateInstance`, so traces
+remain visible while the WSI thread is blocked instead of sitting only in the
+payload's captured stderr file. Normal payload builds do not bind the sink.
+
+```sh
+env/run deps/mesa/build.sh host --driver venus
+env/run deps/mesa/build.sh ps5 --driver venus
+env/run clients/vkcube/build.sh host --driver venus --sync-trace
+env/run clients/vkcube/build.sh ps5 --driver venus --sync-trace
+```
+
+`--sync-trace` is Venus-only and sets `VN_DEBUG=wsi` before driver loading.
+The diagnostic payload requires its matching callback-enabled ICD rather than
+silently dropping live logs. Existing driver paths, separate payloads, and
+9590/9591 log ports are unchanged. The host driver still uses Mesa's normal
+stderr logging; set `MESA_LOG_LEVEL=debug` when collecting those trace messages.

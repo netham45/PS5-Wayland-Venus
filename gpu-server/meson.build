@@ -66,6 +66,7 @@ pkg.generate(lib, name: 'ps5wl-gpud', description: 'In-process Venus GPU server'
 executable('gpud-host', 'tests/host.c', dependencies: gpud_dep, install: true)
 if not meson.is_cross_build()
   mask = executable('memory-mask', 'tests/memory-mask.c', include_directories: inc)
+  executable('pending-client', 'tests/pending-client.c', include_directories: inc, dependencies: deps)
   test('memory-mask', mask)
   executable('render-client', 'render/client.c', 'render/wire.c', include_directories: inc, dependencies: gpud_dep)
   wire_test = executable('render-wire-test', 'render/wire-test.c', 'render/wire.c', include_directories: inc, dependencies: threads)

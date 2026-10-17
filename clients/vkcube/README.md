@@ -196,3 +196,26 @@ OS-selected ephemeral port. All production PS5 callers retain explicit
 ports. `env/run common/ps5log/test/run` passes the existing logger suite plus
 a regression starting two port-zero logger processes simultaneously.
 Host and PS5 Venus client rebuilds both exited 0 after this correction.
+
+## Failure and synchronization diagnostics
+
+PS5 instance failures log the exact `VkResult` and requested extension/layer
+names before the existing error exit, and dump the captured Mesa stderr tail.
+The shared fatal handler uses `SA_SIGINFO` with the **measured PS5 signal
+adapter** from `probes/lkl/faults.c`: an opaque 64-byte native prefix, then the
+SDK's matching GPR prefix (`mc_rip` at native ucontext +224). It does not use
+the SDK's incompatible `ucontext_t.uc_mcontext` offset or interpret the opaque
+prefix as a known signal mask. The handler bounds-checks native `mc_len`,
+formats PC, stack pointer, fault address, trap/error and driver base on its
+fixed stack, and only emergency-writes then `_exit`s. It does not unwind,
+allocate, lock, call `dladdr`, or format through stdio in the signal context.
+The driver module/base lookup is logged during normal driver loading, before
+instance/device creation, for offline PC symbolization. This adapter's ABI
+provenance and firmware limitations are documented in `probes/lkl/RESULTS.md`.
+
+`build.sh host|ps5 --driver venus --sync-trace` enables the WSI trace described
+in `deps/mesa/README.md`. For the matching server, `gpu-server/tests/vtest-cube
+--sanitize --sync-trace` additionally requires a nonzero queue-ring fence to
+be submitted, successfully waited, and retired through the vtest callback,
+plus completed WSI fence/present stages and wait-pipe signaling. Add `--full-hd`
+for the existing 600-frame 1920×1080 and killed/concurrent-client coverage.

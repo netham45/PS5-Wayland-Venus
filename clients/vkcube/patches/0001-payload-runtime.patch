@@ -162,7 +162,7 @@
  
  void* vulkan_library;
  
-@@ -198,12 +199,25 @@
+@@ -198,12 +199,29 @@
  
      vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
  #else  // Assume everything else supports dlopen
@@ -182,6 +182,10 @@
      vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
 +    if (!vkGetInstanceProcAddr)
 +        vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(library, "vk_icdGetInstanceProcAddr");
++#ifdef PS5WL_PS5
++    extern void ps5wl_vulkan_log_module(void *library, void *symbol);
++    ps5wl_vulkan_log_module(library, (void *)vkGetInstanceProcAddr);
++#endif
 +#if defined(PS5WL_PS5) && defined(PS5WL_VENUS) && defined(PS5WL_SYNC_TRACE)
 +    extern int ps5wl_vulkan_trace_bind(void *library);
 +    if (ps5wl_vulkan_trace_bind(library))

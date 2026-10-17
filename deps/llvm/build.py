@@ -63,6 +63,8 @@ def build(target, src):
             '-DLLVM_HOST_TRIPLE=x86_64-sie-ps5', '-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-sie-ps5',
             '-DLLVM_TABLEGEN=' + str(BASE / 'host/bin/llvm-tblgen'),
             '-DLLVM_ENABLE_PIC=ON', '-DLLVM_ENABLE_THREADS=ON',
+            '-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -fno-omit-frame-pointer',
+            '-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -fno-omit-frame-pointer',
         ]
     fresh = [] if (binary / 'build.ninja').exists() else ['--fresh']
     run(['cmake'] + fresh + ['-G', 'Ninja', '-S', src / 'llvm', '-B', binary] + options)

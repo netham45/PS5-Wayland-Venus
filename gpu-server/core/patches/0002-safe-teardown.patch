@@ -1,0 +1,370 @@
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -13,6 +13,9 @@
+ #include "vkr_device_memory.h"
+ #include "vkr_physical_device.h"
+ #include "vkr_queue.h"
++#include "gpud_limits.h"
++#include <stdatomic.h>
++#include <time.h>
+ 
+ static VkResult
+ vkr_device_create_queues(struct vkr_context *ctx,
+@@ -311,28 +314,172 @@
+    vkr_device_remove_object(ctx, dev, obj);
+ }
+ 
+-void
+-vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy_vk)
+-{
++struct vkr_device_idle_check {
++   struct vkr_device *dev;
++   uint32_t ctx_id;
++   bool on_worker_thread;
++   thrd_t thread;
++   atomic_bool done;
++   VkResult result;
++   VkFence fences[];
++};
++
++static uint64_t
++vkr_device_now_ns(void)
++{
++   struct timespec now;
++   if (clock_gettime(CLOCK_MONOTONIC, &now))
++      return 0;
++   return (uint64_t)now.tv_sec * UINT64_C(1000000000) + now.tv_nsec;
++}
++
++static int
++vkr_device_idle_thread(void *opaque)
++{
++   struct vkr_device_idle_check *check = opaque;
++   struct vkr_device *dev = check->dev;
+    struct vn_device_proc_table *vk = &dev->proc_table;
+    VkDevice device = dev->base.handle.device;
++   VkResult result = VK_SUCCESS;
++   uint32_t index = 0, pending = 0;
++   const VkFenceCreateInfo create_info = {
++      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
++   };
++
++   /* A fence submitted after every queue's existing work covers submissions
++    * without user fences and every preceding timeline signal/wait as well.
++    * Do not trust an early-success DeviceWaitIdle implementation on its own. */
++   list_for_each_entry (struct vkr_queue, queue, &dev->queues, base.track_head) {
++      result = vk->CreateFence(device, &create_info, NULL, &check->fences[index]);
++      if (result != VK_SUCCESS)
++         goto out;
++      mtx_lock(&queue->vk_mutex);
++      result = vk->QueueSubmit(queue->base.handle.queue, 0, NULL, check->fences[index]);
++      mtx_unlock(&queue->vk_mutex);
++      index++;
++      if (result != VK_SUCCESS)
++         goto out;
++   }
++
++   uint64_t start = vkr_device_now_ns();
++   vkr_log("teardown DeviceWaitIdle enter ctx=%u device=%p worker=%u queues=%u",
++           check->ctx_id, (void *)device, check->on_worker_thread, index);
++   result = vk->DeviceWaitIdle(device);
++   uint64_t end = vkr_device_now_ns();
++   vkr_log("teardown DeviceWaitIdle result=%d duration_ms=%" PRIu64 " ctx=%u",
++           result, start && end >= start ? (end - start) / UINT64_C(1000000) : 0,
++           check->ctx_id);
++   if (result != VK_SUCCESS)
++      goto out;
++
++   for (uint32_t i = 0; i < index; i++) {
++      result = vk->GetFenceStatus(device, check->fences[i]);
++      if (result != VK_SUCCESS) {
++         vkr_log("teardown queue sentinel not idle ctx=%u queue=%u result=%d",
++                 check->ctx_id, i, result);
++         goto out;
++      }
++   }
++   list_for_each_entry (struct vkr_queue, queue, &dev->queues, base.track_head) {
++      mtx_lock(&queue->sync_thread.mutex);
++      list_for_each_entry (struct vkr_queue_sync, sync, &queue->sync_thread.syncs, head) {
++         pending++;
++         result = sync->device_lost ? VK_ERROR_DEVICE_LOST
++                                   : vk->GetFenceStatus(device, sync->fence);
++         if (result != VK_SUCCESS)
++            break;
++      }
++      mtx_unlock(&queue->sync_thread.mutex);
++      if (result != VK_SUCCESS) {
++         vkr_log("teardown outstanding queue fence not idle ctx=%u result=%d",
++                 check->ctx_id, result);
++         goto out;
++      }
++   }
++   vkr_log("teardown idle verified ctx=%u queues=%u outstanding_fences=%u",
++           check->ctx_id, index, pending);
++   for (uint32_t i = 0; i < index; i++)
++      vk->DestroyFence(device, check->fences[i], NULL);
++out:
++   check->result = result;
++   atomic_store_explicit(&check->done, true, memory_order_release);
++   return 0;
++}
++
++bool
++vkr_device_wait_idle(struct vkr_context *ctx, struct vkr_device *dev)
++{
++   const char *reason = "GPU already wedged";
++   if (dev->idle_verified)
++      return true;
++   if (ctx->teardown_abandoned || gpud_is_wedged())
++      goto abandon;
++   uint32_t count = 0;
++   list_for_each_entry (struct vkr_queue, queue, &dev->queues, base.track_head)
++      count++;
++   struct vkr_device_idle_check *check =
++      calloc(1, sizeof(*check) + count * sizeof(check->fences[0]));
++   reason = "cannot allocate bounded idle check";
++   if (!check)
++      goto abandon;
++   dev->idle_check = check;
++   check->dev = dev;
++   check->ctx_id = ctx->ctx_id;
++   check->on_worker_thread = ctx->on_worker_thread;
++   atomic_init(&check->done, false);
++   reason = "cannot start bounded idle check";
++   if (thrd_create(&check->thread, vkr_device_idle_thread, check) != thrd_success)
++      goto abandon;
++
++   uint64_t start = vkr_device_now_ns(), now = start;
++   const struct timespec delay = { .tv_nsec = 1000000 };
++   while (!atomic_load_explicit(&check->done, memory_order_acquire)) {
++      now = vkr_device_now_ns();
++      if (!start || !now || now - start >= UINT64_C(2000000000))
++         break;
++      thrd_sleep(&delay, NULL);
++   }
++   if (!atomic_load_explicit(&check->done, memory_order_acquire)) {
++      thrd_detach(check->thread);
++      vkr_log("teardown idle timeout ctx=%u duration_ms=%" PRIu64 " bound_ms=2000",
++              ctx->ctx_id, start && now >= start ? (now - start) / UINT64_C(1000000) : 0);
++      reason = "device idle timeout (2000ms)";
++      goto abandon;
++   }
++   thrd_join(check->thread, NULL);
++   reason = "device or outstanding queue fence is not idle";
++   if (check->result != VK_SUCCESS)
++      goto abandon;
++   free(check);
++   dev->idle_check = NULL;
++   dev->idle_verified = true;
++   return true;
++abandon:
++   ctx->teardown_abandoned = true;
++   vkr_context_set_fatal(ctx);
++   gpud_mark_wedged(ctx->ctx_id, reason);
++   return false;
++}
++
++void
++vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev)
++{
++   struct vn_device_proc_table *vk = &dev->proc_table;
++   VkDevice device = dev->base.handle.device;
+ 
+    if (!list_is_empty(&dev->objects))
+       vkr_log("destroying device with valid objects");
+ 
+-   /* only wait if on workder thread to prepare for vk obj cleanup */
+-   if (ctx->on_worker_thread) {
+-      VkResult result = vk->DeviceWaitIdle(device);
+-      if (result != VK_SUCCESS)
+-         vkr_log("vkDeviceWaitIdle(%p) failed(%d)", dev, (int32_t)result);
+-   }
+-
+-   mtx_destroy(&dev->object_mutex);
++   if (!vkr_device_wait_idle(ctx, dev))
++      return;
++
++   /* All imported mappings remain intact until both idle checks succeeded. */
+ 
+    if (!list_is_empty(&dev->objects)) {
+       list_for_each_entry_safe (struct vkr_object, obj, &dev->objects, track_head)
+          vkr_device_object_destroy(ctx, dev, obj);
+    }
++   mtx_destroy(&dev->object_mutex);
+ 
+    list_for_each_entry_safe (struct vkr_queue, queue, &dev->queues, base.track_head)
+       vkr_queue_destroy(ctx, queue);
+@@ -344,8 +491,7 @@
+ 
+    mtx_destroy(&dev->free_sync_mutex);
+ 
+-   if (destroy_vk || ctx->on_worker_thread)
+-      vk->DestroyDevice(device, NULL);
++   vk->DestroyDevice(device, NULL);
+ 
+    list_del(&dev->base.track_head);
+ 
+@@ -363,7 +509,7 @@
+    if (!dev)
+       return;
+ 
+-   vkr_device_destroy(ctx, dev, true);
++   vkr_device_destroy(ctx, dev);
+ }
+ 
+ static void
+--- a/src/venus/vkr_device.h
++++ b/src/venus/vkr_device.h
+@@ -26,14 +26,19 @@
+ 
+    mtx_t object_mutex;
+    struct list_head objects;
++   bool idle_verified;
++   struct vkr_device_idle_check *idle_check;
+ };
+ VKR_DEFINE_OBJECT_CAST(device, VK_OBJECT_TYPE_DEVICE, VkDevice)
+ 
+ void
+ vkr_context_init_device_dispatch(struct vkr_context *ctx);
+ 
++bool
++vkr_device_wait_idle(struct vkr_context *ctx, struct vkr_device *dev);
++
+ void
+-vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy_vk);
++vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev);
+ 
+ static inline bool
+ vkr_device_should_track_object(const struct vkr_object *obj)
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -8,6 +8,7 @@
+ #include <sys/mman.h>
+ #include <sys/types.h>
+ #include <unistd.h>
++#include "gpud_limits.h"
+ 
+ #include "util/anon_file.h"
+ #include "venus-protocol/vn_protocol_renderer_dispatches.h"
+@@ -613,16 +614,29 @@
+    mtx_destroy(&ctx->ring_monitor.mutex);
+ }
+ 
++/* A timed-out driver thread may still reference every object in its context.
++ * Keep a process-lifetime root, including the DSO reference, until LoadExec. */
++static struct list_head quarantined_contexts = {
++   &quarantined_contexts, &quarantined_contexts,
++};
++
+ void
+ vkr_context_destroy(struct vkr_context *ctx)
+ {
+-   /* TODO Move the entire teardown process to a separate thread so that the main thread
+-    * cannot get blocked by the vkDeviceWaitIdle upon device destruction.
+-    */
+-   list_for_each_entry_safe (struct vkr_ring, ring, &ctx->rings, head) {
++   list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head)
+       vkr_ring_stop(ring);
++
++   if (ctx->teardown_abandoned || gpud_is_wedged() ||
++       (ctx->instance && !vkr_instance_wait_idle(ctx, ctx->instance))) {
++      ctx->teardown_abandoned = true;
++      list_addtail(&ctx->head, &quarantined_contexts);
++      vkr_log("teardown retained ctx=%u: imported SHM, objects, device and Vulkan DSO remain live",
++              ctx->ctx_id);
++      return;
++   }
++
++   list_for_each_entry_safe (struct vkr_ring, ring, &ctx->rings, head)
+       vkr_ring_destroy(ring);
+-   }
+    mtx_destroy(&ctx->ring_mutex);
+ 
+    vkr_context_wait_ring_fini(ctx);
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -53,6 +53,7 @@
+ 
+    /* true if ENABLE_RENDER_SERVER_WORKER_THREAD is defined */
+    bool on_worker_thread;
++   bool teardown_abandoned;
+ 
+    mtx_t ring_mutex;
+    struct list_head rings;
+--- a/src/venus/vkr_instance.c
++++ b/src/venus/vkr_instance.c
+@@ -9,6 +9,7 @@
+ 
+ #include "vkr_context.h"
+ #include "vkr_physical_device.h"
++#include "vkr_device.h"
+ 
+ static void
+ vkr_dispatch_vkEnumerateInstanceVersion(UNUSED struct vn_dispatch_context *dispatch,
+@@ -238,12 +239,29 @@
+    vkr_context_add_instance(ctx, instance, app_info.pApplicationName);
+ }
+ 
++bool
++vkr_instance_wait_idle(struct vkr_context *ctx, struct vkr_instance *instance)
++{
++   for (uint32_t i = 0; i < instance->physical_device_count; i++) {
++      struct vkr_physical_device *physical_dev = instance->physical_devices[i];
++      if (!physical_dev)
++         break;
++      list_for_each_entry (struct vkr_device, dev, &physical_dev->devices, base.track_head) {
++         if (!vkr_device_wait_idle(ctx, dev))
++            return false;
++      }
++   }
++   return true;
++}
++
+ void
+ vkr_instance_destroy(struct vkr_context *ctx,
+                      struct vkr_instance *instance,
+                      bool destroy_vk)
+ {
+    struct vn_instance_proc_table *vk = &instance->proc_table;
++   if (!vkr_instance_wait_idle(ctx, instance))
++      return;
+ 
+    for (uint32_t i = 0; i < instance->physical_device_count; i++) {
+       struct vkr_physical_device *physical_dev = instance->physical_devices[i];
+--- a/src/venus/vkr_instance.h
++++ b/src/venus/vkr_instance.h
+@@ -30,6 +30,9 @@
+ void
+ vkr_context_init_instance_dispatch(struct vkr_context *ctx);
+ 
++bool
++vkr_instance_wait_idle(struct vkr_context *ctx, struct vkr_instance *instance);
++
+ void
+ vkr_instance_destroy(struct vkr_context *ctx,
+                      struct vkr_instance *instance,
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -80,8 +80,10 @@
+ void
+ vkr_renderer_fini(void)
+ {
+-   list_for_each_entry_safe (struct vkr_context, ctx, &vkr_state.contexts, head)
++   list_for_each_entry_safe (struct vkr_context, ctx, &vkr_state.contexts, head) {
++      list_del(&ctx->head);
+       vkr_context_destroy(ctx);
++   }
+ 
+    list_inithead(&vkr_state.contexts);
+ 
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -92,7 +92,7 @@
+                             struct vkr_physical_device *physical_dev)
+ {
+    list_for_each_entry_safe (struct vkr_device, dev, &physical_dev->devices, base.track_head)
+-      vkr_device_destroy(ctx, dev, false);
++      vkr_device_destroy(ctx, dev);
+ 
+    free(physical_dev->extensions);
+    free(physical_dev->queue_family_properties);

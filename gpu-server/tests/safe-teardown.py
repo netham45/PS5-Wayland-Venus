@@ -25,6 +25,10 @@ def mappings(pid):
             if 'vkr' in line or 'virgl' in line}
 
 
+def driver_loaded(pid):
+    return '/libvulkan_lvp.so' in (Path('/proc') / str(pid) / 'maps').read_text()
+
+
 def refused(path):
     with socket.socket(socket.AF_UNIX) as peer:
         peer.settimeout(2)
@@ -64,6 +68,7 @@ def run(build, mode, logs):
                 until(lambda: marker in client_log.read_text(), [server, client], 30, 'client did not submit real work')
                 before = mappings(server.pid)
                 assert before, 'no imported SHM mapping to protect'
+                assert driver_loaded(server.pid), 'host Vulkan driver is not resident'
                 client.kill()
                 client.wait()
                 started = time.monotonic()
@@ -71,6 +76,7 @@ def run(build, mode, logs):
                     until(lambda: 'gpud wedged:' in server_log.read_text(), [server], 4, 'pending-work teardown was not bounded')
                     after = mappings(server.pid)
                     assert before <= after, 'GPU-referenced SHM was unmapped before idle'
+                    assert driver_loaded(server.pid), 'pending GPU device lost its Vulkan DSO'
                     text = server_log.read_text()
                     assert 'teardown retained' in text and 'idle verified' not in text
                     refused(runtime / 'vtest')
@@ -78,6 +84,7 @@ def run(build, mode, logs):
                 else:
                     until(lambda: 'context destroyed' in server_log.read_text(), [server], 5, 'idle context was not destroyed')
                     assert not mappings(server.pid), 'idle context retained SHM'
+                    assert not driver_loaded(server.pid), 'verified idle context retained its Vulkan DSO'
                     text = server_log.read_text()
                     assert 'DeviceWaitIdle result=0' in text and 'idle verified' in text
                     assert 'gpud wedged:' not in text

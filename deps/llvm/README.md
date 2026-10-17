@@ -133,14 +133,23 @@ protection to the FreeBSD-targeted lavapipe payload; it does not change the
 SDK ABI, suppress the error, or replace the C11 implementation.
 The corrected public PS5 Mesa build and both client links completed (exit 0).
 `objdump --disassemble=vk_instance_init` now shows all three mutex initializers
-calling `mesa_mtx_init`, whose plain-mutex branch returns 0. This proves the
-binary no longer selects the incompatible SDK return convention for those
-calls; it does not prove a corrected console run.
+calling `mesa_mtx_init`, whose plain-mutex branch returns 0. The authorized
+corrected run passed instance and surface initialization, then failed with
+SIGSEGV before device initialization or any recorded presents
+(`build/ps5/evidence/gpu/l5-corrected-client.log`).
 
-A corrected console run still requires explicit authorization. Use a
-compositor lifetime long enough for 600 CPU-rendered 1080p frames rather than
-the short Venus experiment timeout. The earlier, separate Venus C3
-connectivity-loss evidence remains in `build/ps5/evidence/gpu/`:
-`c3-corrected-client.log` records a port-9591 timeout and
-`c3-corrected-failure-processes.log` records `No route to host`.
-That earlier loss has no diagnosed cause and is not a lavapipe result.
+The separately authorized fault-capture run records RIP `0x82882448d`, a null
+fault address, trap 12, page-fault error 4 and native mcontext length 1152 in
+`build/ps5/evidence/gpu/l5-fault-client.log`. The opaque-prefix PS5 signal-frame
+adapter captured those fields successfully. The fault instruction is outside
+the loaded driver's static code region, inferred from its logged
+`vkGetInstanceProcAddr` address and that symbol's zero ELF offset. The faulting
+system module, caller and cause are not established; SDK import stubs do not
+contain firmware symbol offsets. PS5 LLVM and Mesa lavapipe builds retain frame
+pointers for the approved follow-on register, instruction and stack capture.
+No worker-stack, TLS or JIT-protection cause is inferred from this failure.
+
+No 600-present or screenshot acceptance is claimed. Every additional console
+run requires explicit authorization and coordination with the console owner.
+For a full acceptance run, allow enough compositor lifetime for 600 CPU-rendered
+1080p frames rather than the short Venus experiment timeout.

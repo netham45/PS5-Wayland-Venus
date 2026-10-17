@@ -130,3 +130,14 @@ Subject: [PATCH] venus: trace asynchronous WSI and forward PS5 diagnostics
  	local:
  		*;
  };
+--- a/src/virtio/vulkan/vn_common.h
++++ b/src/virtio/vulkan/vn_common.h
+@@ -324,4 +324,8 @@
+ void
+ vn_log(struct vn_instance *instance, const char *format, ...)
+    PRINTFLIKE(2, 3);
++
++#ifdef PS5WL_VENUS_PS5
++void ps5wl_venus_set_log_handler(void (*handler)(const char *));
++#endif
+ 

@@ -88,7 +88,8 @@ def build(target):
     if target == 'ps5':
         options += ['--cross-file', ROOT / 'build/ps5/cross.ini', '--cross-file', llvm_machine,
                     '--native-file', ROOT / 'build/ps5/native.ini',
-                    '-Dcpp_args=-I' + str(dependency_prefix / 'include')]
+                    '-Dc_args=-I' + str(dependency_prefix / 'include') + ' -fno-omit-frame-pointer',
+                    '-Dcpp_args=-I' + str(dependency_prefix / 'include') + ' -fno-omit-frame-pointer']
     else:
         options += ['--native-file', llvm_machine]
     binary = mesa.configure(target + '-lavapipe', src, options, env)

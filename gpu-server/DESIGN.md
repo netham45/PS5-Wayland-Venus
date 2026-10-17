@@ -463,3 +463,30 @@ therefore correctly run out of host quota. The independent real-Venus
 `deps/mesa/tests/vtest-quota.py` regression requires the OOM reply and successful
 allocation recovery on the same context, rather than hiding that difference by
 raising the console quota.
+
+Forced client-EOF and server-stop teardown is guarded by
+`core/patches/0002-safe-teardown.patch`. Both generated host and PS5 configs set
+`ENABLE_RENDER_SERVER_WORKER_THREAD=1`: the previous path did call
+`vkDeviceWaitIdle`, but that call had no deadline. The guard runs it on a
+dedicated thread with a 2000 ms bound, logging entry, worker mode, result and
+duration. A sentinel fence appended to every queue must also be signalled,
+covering preceding fence-less submissions and timeline operations; outstanding
+queue-sync fences must be complete too. No imported mapping or Vulkan device
+is destroyed before these checks succeed.
+
+A timeout or non-idle result wedges gpud and roots the entire context, imported
+SHM, Vulkan objects, device and DSO until process exit/LoadExec. New contexts and
+submissions are refused, retained-resource unrefs cannot unmap those pages, and
+stop returns `-EBUSY`. Front-end callback registrations are drained and disabled
+before teardown so retained queue threads cannot touch a freed client.
+`env/run python3 gpu-server/tests/safe-teardown.py --sanitize` compares an idle
+client with a real Venus queue submission waiting on an unsignalled timeline
+semaphore. Both clients are killed without Vulkan cleanup; the pending case
+requires bounded quarantine, unchanged imported SHM mappings and refusal of a
+new context. It uses no fake driver or sanitizer suppression.
+The regression failed against the previous ASan core because pending-work EOF
+teardown did not reach a bounded wedge result within four seconds. With the
+guard, ASan/LSan/UBSan passed: idle teardown took 41 ms and released all five
+SHM mappings and the lavapipe DSO; pending teardown took 2.010 s and retained
+all five mappings and the DSO, refused a new context, and returned the expected
+wedged stop status. No console execution is part of this regression.

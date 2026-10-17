@@ -298,7 +298,9 @@ int ps5wl_gpud_stop(unsigned drain_ms)
         return -EBUSY;
     }
     if (gpud_is_wedged()) return -EBUSY;
-    vkr_renderer_fini(); started = false;
+    vkr_renderer_fini();
+    if (gpud_is_wedged()) return -EBUSY;
+    started = false;
     char message[96];
     snprintf(message, sizeof(message), "gpud stopped: Vulkan fd-export calls=%" PRIu64, gpud_fd_export_count());
     logger(VIRGL_LOG_LEVEL_INFO, message, NULL);
