@@ -414,6 +414,14 @@ clients, pipe/sync protocol regressions, malformed-client/stalled-peer
 isolation, zero measured Vulkan fd exports, and SHM fd/mapping counts returning
 to baseline after a killed client. Logs are retained under
 `build/gpud/logs/{host,sanitize}`; no console action occurs in this harness.
+Both normal and ASan/LSan/UBSan native suites have passed: single 120-frame
+client, killed-client cleanup, and two simultaneous 120-frame clients, with
+zero measured Vulkan fd exports. SHM descriptor/mapping counts were `(0, 0)`
+at baseline, `(12, 22)` with the victim active, and `(0, 0)` after its death in
+both variants. Sanitizer checking used leak detection without suppressions or
+driver preloading. The render regression separately passed a 1 MiB quota test:
+a retained 640 KiB exported resource rejects another 640 KiB blob after
+vkFreeMemory, and permits it after RESOURCE_UNREF.
 
 The sanitizer run reproduced two pinned-vkr lifetime/arithmetic defects now
 fixed by the live patch: signed `1 << 31` in extension-mask construction, and

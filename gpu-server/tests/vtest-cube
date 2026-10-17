@@ -28,7 +28,14 @@ def stop(p):
 def counts(pid):
     proc = Path('/proc') / str(pid)
     fds = list((proc/'fd').iterdir())
-    shm_fds = sum('vkr' in os.readlink(f) or 'virgl' in os.readlink(f) for f in fds)
+    shm_fds = 0
+    for fd in fds:
+        try:
+            target = os.readlink(fd)
+        except FileNotFoundError:
+            # Client cleanup can close a descriptor after procfs lists it.
+            continue
+        shm_fds += 'vkr' in target or 'virgl' in target
     maps = [x for x in (proc/'maps').read_text().splitlines() if 'vkr' in x or 'virgl' in x]
     return shm_fds, len(maps)
 

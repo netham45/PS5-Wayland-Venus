@@ -282,6 +282,9 @@ a second context stalled before INIT. It also frees VkDeviceMemory while the
 exported blob resource is live, remaps the retained fd, then makes vkr write a
 Vulkan enumeration reply through that resource. This specifically detects a
 dangling server-side SHM alias; a client mapping read alone cannot.
+With a 1-MiB host quota, the retained 640-KiB allocation must continue consuming
+quota after vkFreeMemory: another 640-KiB blob-zero allocation must fail until
+the exported resource is unreferenced, then the same request must succeed.
 `wire-test.c` independently covers both
 socket types, SCM_RIGHTS+CLOEXEC, fragmented stream headers, coalesced records,
 oversized records, EOF mid-header, truncated seqpacket payloads, and rejection
@@ -296,8 +299,9 @@ exited 0 with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and
 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`. Both reported:
 
 ```
-host-pointer blob: size=16384 (ordinary SHM fd; no Vulkan fd export)
+host-pointer blob: size=655360 (ordinary SHM fd; no Vulkan fd export)
 gpud stopped: Vulkan fd-export calls=0
+render <transport>: host quota=1048576 retained=655360, INVALID before UNREF, success after UNREF PASS
 render <transport>: Venus instance/device, retained host-pointer SHM blob, timeline seqno=9 PASS
 ```
 

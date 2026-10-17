@@ -135,6 +135,23 @@ The isolated `VIDEOOUT_ONLY` path excludes the GPU server entirely. These
 integration paths require the console acceptance gates in `gpu-server/PLAN.md`;
 the installed normal preflight image described above predates this integration.
 
+The later approved C-series established the host-memory prerequisites without
+deploying this integrated compositor. Native C1 measured about 409 MiB flexible
+headroom; 64/256 MiB shared mappings succeeded and 1 GiB returned `ENOMEM`, the
+plan's expected quota gate. The authorized continuation completed released
+2–256 MiB full/main direct-memory ladders, `SOCK_SEQPACKET`, RADV `dlopen` and
+`vkCreateInstance`. C2a then GPU-filled shared mappings of 16 KiB, 8 MiB and
+64 MiB while normal compositor 102 was foreground; a second payload received
+each fd and verified every word with zero mismatches. Native no-VideoOut C2b
+115 created a RADV device, cleared a 64×64 R32_UINT image, copied to imported
+16 KiB SHM and verified all 4096 words with zero mismatches. Every two-second
+fence wait returned success. Logs are `build/ps5/gpu-probes/c1-remaining.log`,
+`c2a-{16384,8388608,67108864}.log` and `c2b.log`; the probe owner's
+`gpu-server/probes/RESULTS.md` records full measurements. The final process
+snapshot `build/ps5/evidence/c-series-final-processes.log` contains only resident
+installer 85 among project processes. These results do not yet prove Venus
+protocol clients or Vulkan Wayland presentation through the integrated server.
+
 Wayland library diagnostics are routed to the same TCP logger as wlroots, so
 protocol failures remain observable without payload stderr forwarding.
 The payload callback honors wlroots' configured verbosity. Finite validation

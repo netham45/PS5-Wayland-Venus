@@ -1,4 +1,4 @@
-#define _GNU_SOURCE
+#define _GNU_SOURCE 1
 #include "wire.h"
 #include <assert.h>
 #include <fcntl.h>

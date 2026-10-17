@@ -1,4 +1,4 @@
-#define _GNU_SOURCE
+#define _GNU_SOURCE 1
 #include "wire.h"
 #include "ps5wl_gpud.h"
 #include <assert.h>
@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #define PAGE_BYTES 16384u
+#define HOST_QUOTA (1024u * 1024u)
+#define MEMORY_BYTES (40u * PAGE_BYTES) /* 640 KiB: two exceed HOST_QUOTA */
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%s:%d: %s failed\n", __FILE__, __LINE__, #x); exit(1); } } while (0)
 /* Small typed encoder for the pinned Venus 1.2.0 protocol. Scalar fields are
  * packed at 4-byte boundaries; pointers/array lengths/handles are uint64_t.
@@ -67,6 +69,7 @@ static int create_blob(struct gpud_wire *w, uint32_t id, uint64_t blob, uint64_t
     struct render_context_op_create_resource_reply reply;
     int fds[GPUD_RENDER_MAX_FDS]; unsigned count;
     CHECK(gpud_wire_recv(w, &reply, sizeof(reply), fds, &count) == sizeof(reply));
+    if (reply.fd_type == VIRGL_RESOURCE_FD_INVALID) { CHECK(count == 0); return -1; }
     CHECK(reply.fd_type == VIRGL_RESOURCE_FD_SHM && count == 1);
     struct stat st;
     CHECK(fstat(fds[0], &st) == 0 && (uint64_t)st.st_size >= bytes);
@@ -87,7 +90,7 @@ int main(int argc, char **argv)
     snprintf(render_path, sizeof(render_path), "%s/render", dir);
     snprintf(vtest_path, sizeof(vtest_path), "%s/vtest", dir);
     struct ps5wl_gpud_config config = { .render_path = render_path, .vtest_path = vtest_path,
-        .host_bytes_per_ctx = 64 * 1024 * 1024, .device_bytes_per_ctx = 64 * 1024 * 1024, .max_ctx = 8 };
+        .host_bytes_per_ctx = HOST_QUOTA, .device_bytes_per_ctx = 64 * 1024 * 1024, .max_ctx = 8 };
     CHECK(ps5wl_gpud_start(&config) == 0);
     struct gpud_wire client = { .fd = socket(AF_UNIX, !strcmp(argv[1], "stream") ? SOCK_STREAM : SOCK_SEQPACKET, 0),
                                 .stream = !strcmp(argv[1], "stream") };
@@ -166,10 +169,11 @@ int main(int argc, char **argv)
     u64(&e, 0); u64(&e, 1); u64(&e, 3);
     submit(&ctx, &e); fence(&ctx, timeline, 0, 4); result_ok(reply, 11);
     seek_reply(&e); command(&e, 21, true); u64(&e, 3); u64(&e, 1);
-    u32(&e, 5); u64(&e, 0); u64(&e, PAGE_BYTES); u32(&e, type);
+    u32(&e, 5); u64(&e, 0); u64(&e, MEMORY_BYTES); u32(&e, type);
     u64(&e, 0); u64(&e, 1); u64(&e, 4);
     submit(&ctx, &e); fence(&ctx, timeline, 0, 5); result_ok(reply, 21);
-    int blob_fd = create_blob(&ctx, 2, 4, PAGE_BYTES);
+    int blob_fd = create_blob(&ctx, 2, 4, MEMORY_BYTES);
+    CHECK(blob_fd >= 0);
     unsigned char *memory = mmap(NULL, PAGE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, blob_fd, 0);
     CHECK(memory != MAP_FAILED);
     for (size_t i = 0; i < PAGE_BYTES; i++) memory[i] = (unsigned char)i;
@@ -178,6 +182,8 @@ int main(int argc, char **argv)
     /* Above validates shared host-pointer blob export, not GPU execution. */
     command(&e, 22, false); u64(&e, 3); u64(&e, 4); u64(&e, 0);
     submit(&ctx, &e); fence(&ctx, timeline, 0, 7);
+    /* Freeing Vulkan memory must not release the exported resource's charge. */
+    CHECK(create_blob(&ctx, 3, 0, MEMORY_BYTES) == -1);
     /* The export and resource must outlive VkDeviceMemory's own host mapping. */
     CHECK(munmap(memory, PAGE_BYTES) == 0);
     memory = mmap(NULL, PAGE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, blob_fd, 0);
@@ -195,6 +201,12 @@ int main(int argc, char **argv)
     submit(&ctx, &e); fence(&ctx, timeline, 0, 9);
     struct render_context_op_destroy_resource_request unref = { .header.op = RENDER_CONTEXT_OP_DESTROY_RESOURCE, .res_id = 2 };
     send_plain(&ctx, &unref, sizeof(unref));
+    /* Resource UNREF, not vkFreeMemory, now makes quota available again. */
+    int quota_fd = create_blob(&ctx, 3, 0, MEMORY_BYTES);
+    CHECK(quota_fd >= 0); close(quota_fd);
+    printf("render %s: host quota=%u retained=%u, INVALID before UNREF, success after UNREF PASS\n",
+           argv[1], HOST_QUOTA, MEMORY_BYTES);
+    unref.res_id = 3; send_plain(&ctx, &unref, sizeof(unref));
     unref.res_id = 1; send_plain(&ctx, &unref, sizeof(unref));
     close(ctx.fd);
     struct render_client_op_destroy_context_request destroy = { .header.op = RENDER_CLIENT_OP_DESTROY_CONTEXT, .ctx_id = 17 };
