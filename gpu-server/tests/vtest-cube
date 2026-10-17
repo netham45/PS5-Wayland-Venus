@@ -42,11 +42,18 @@ def counts(pid):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sanitize', action='store_true')
+    parser.add_argument('--ps5-constraints', action='store_true',
+                        help='128 MiB/context, two contexts, 1920x1080, 600 presents')
+    parser.add_argument('--full-hd', action='store_true',
+                        help='1920x1080, 600 presents with ordinary host quotas')
     a = parser.parse_args()
+    full_hd = a.full_hd or a.ps5_constraints
     if os.environ.get('PS5WL_BUILD_ENV') != '1':
         parser.error('run inside env/run')
     build = ROOT/'build/gpud'/('host-sanitize' if a.sanitize else 'host')
-    logs = ROOT/'build/gpud/logs'/('sanitize' if a.sanitize else 'host')
+    mode = 'sanitize' if a.sanitize else 'host'
+    mode += '-ps5' if a.ps5_constraints else '-full-hd' if full_hd else ''
+    logs = ROOT/'build/gpud/logs'/mode
     logs.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(build/'memory-mask')], check=True)
     with tempfile.TemporaryDirectory(prefix='gpud-', dir=ROOT/'build') as temp:
@@ -62,7 +69,9 @@ def main():
         with (logs/'compositor.log').open('w') as cl, (logs/'server.log').open('w') as sl:
             compositor = subprocess.Popen([str(ROOT/'build/host/compositor/ps5wl'), '-b','headless','-d',env['WAYLAND_DISPLAY']], env=env, stdout=cl, stderr=cl)
             host_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_lvp.so'))
-            server = subprocess.Popen([str(build/'gpud-host'), str(runtime/'vtest'), str(runtime/'render')], env=host_env, stdout=sl, stderr=sl)
+            server_args = [str(build/'gpud-host'), str(runtime/'vtest'), str(runtime/'render')]
+            if a.ps5_constraints: server_args.append('--ps5-limits')
+            server = subprocess.Popen(server_args, env=host_env, stdout=sl, stderr=sl)
             children = []
             try:
                 ready(runtime/env['WAYLAND_DISPLAY'], compositor)
@@ -70,9 +79,12 @@ def main():
                 vtest_protocol.run(runtime/'vtest')
                 client_env = dict(env, PS5WL_VULKAN_LIBRARY=str(ROOT/'build/host/venus/lib/libvulkan_virtio.so'))
                 cube = ROOT/'build/host/vkcube-venus/ps5wl-vkcube-venus'
+                frames = 600 if full_hd else 120
                 def launch(name, frames):
                     out = (logs/(name+'.log')).open('w')
-                    p = subprocess.Popen([str(cube),'--wsi','wayland','--c',str(frames)], env=client_env, stdout=out, stderr=out)
+                    args = [str(cube),'--wsi','wayland','--c',str(frames)]
+                    if full_hd: args += ['--width','1920','--height','1080']
+                    p = subprocess.Popen(args, env=client_env, stdout=out, stderr=out)
                     out.close(); children.append(p); return p
                 def passed(p, name):
                     deadline = time.monotonic() + 120
@@ -84,9 +96,9 @@ def main():
                         time.sleep(.02)
                     code = p.returncode
                     text = (logs/(name+'.log')).read_text()
-                    if code or 'vkcube presented frame=120' not in text or 'vkcube exit frames=120 validation_error=0' not in text:
+                    if code or f'vkcube presented frame={frames}' not in text or f'vkcube exit frames={frames} validation_error=0' not in text:
                         raise RuntimeError(f'{name}: exit={code}; see {logs}')
-                passed(launch('single',120),'single')
+                passed(launch('single',frames),'single')
                 time.sleep(.2)
                 baseline = counts(server.pid)
                 victim = launch('killed',1000000)
@@ -104,7 +116,7 @@ def main():
                 if active[1] <= baseline[1] or after != baseline:
                     raise RuntimeError(f'SHM cleanup failed baseline={baseline} active={active} after={after}')
                 (logs/'cleanup.log').write_text(f'SHM fd,mapping baseline={baseline} active={active} after-kill={after}\n')
-                one, two = launch('concurrent-1',120), launch('concurrent-2',120)
+                one, two = launch('concurrent-1',frames), launch('concurrent-2',frames)
                 passed(one,'concurrent-1'); passed(two,'concurrent-2')
             finally:
                 for p in children:
@@ -118,13 +130,14 @@ def main():
             raise RuntimeError(f'server={server.returncode} compositor={compositor.returncode}')
         for marker in ['host-pointer blob:', 'Vulkan fd-export calls=0']:
             if marker not in server_text: raise RuntimeError('missing server evidence '+marker)
-        if 'Created shm allocator' not in compositor_text or 'count=120' not in compositor_text:
-            raise RuntimeError('missing 120 compositor wl_shm commits')
+        dimensions = '1920x1080' if full_hd else '500x500'
+        if 'Created shm allocator' not in compositor_text or f'client surface committed {dimensions} count={frames}' not in compositor_text:
+            raise RuntimeError(f'missing {frames} compositor wl_shm commits at {dimensions}')
         for path in logs.glob('*.log'):
             text = path.read_text()
             if 'ERROR: AddressSanitizer' in text or 'runtime error:' in text or 'LeakSanitizer' in text:
                 raise RuntimeError('sanitizer failure '+str(path))
-        print(f'PASS: 120 Venus shm frames; killed-client SHM baseline; concurrent clients; logs={logs}')
+        print(f'PASS: {frames} Venus shm frames; killed-client SHM baseline; concurrent clients; logs={logs}')
 
 if __name__ == '__main__':
     main()

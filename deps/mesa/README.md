@@ -173,3 +173,48 @@ log level.
 assembler's global `u_mm` heap and its 10-MiB executable mapping at ICD unload.
 The simple enumeration regression does not exercise that graphics shader
 path; the GPU server's cube-under-LeakSanitizer test covers its teardown.
+
+## FreeBSD Venus thread identity
+
+`venus-patches/0006-freebsd-thread-id.patch` fixes `vn_gettid`: FreeBSD
+`SYS_thr_self` takes a `long *` output argument and returns status, not the
+thread ID. The previous no-argument call could return the same error/status
+for different threads or write through an unspecified argument. Venus uses
+the identity for WSI present-worker locking and ring-watchdog ownership.
+The patch passes the output pointer and refuses a failed identity query.
+
+After preparing the Venus source with the normal build above:
+
+```sh
+env/run python3 deps/mesa/tests/thread-id.py host
+env/run python3 deps/mesa/tests/thread-id.py ps5
+```
+
+The test compiles the actual `vn_gettid` function body from the prepared source,
+not a duplicate implementation. It checks three simultaneously live threads
+for positive, distinct IDs and 10,000 stable queries per thread. The PS5 output
+is `build/ps5/venus-thread-id/ps5wl-venus-thread-id.elf`, a plain no-GPU payload
+with logs on 9595; building it does not launch it.
+
+## Vtest allocation-error propagation
+
+`venus-patches/0007-vtest-checked-memory-allocation.patch` makes the vtest
+transport require allocation replies. Otherwise Venus's asynchronous
+`vkAllocateMemory` returns a successful client handle even when the server
+rejects the allocation, and using that nonexistent renderer object fatally
+disconnects the context. The kernel-backed transport keeps its existing policy.
+
+With the sanitized GPU server built:
+
+```sh
+env/run python3 gpu-server/build.py host --sanitize
+env/run python3 deps/mesa/tests/vtest-quota.py
+```
+
+The real Venus client allocates 80 MiB, requires OOM for another 80 MiB under
+the server's 128-MiB host quota, frees the first allocation, and requires a new
+80-MiB allocation to succeed on the same context. The test retains server and
+client logs under `build/gpud/logs/quota`; no fake renderer or Vulkan calls are
+used. This checks error propagation, not that a full-HD lavapipe swapchain fits
+PS5's quota: lavapipe's single memory type charges optimal images as host memory,
+whereas RADV's nonimportable memory types are device-only.

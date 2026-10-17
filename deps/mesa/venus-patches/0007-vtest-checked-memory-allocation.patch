@@ -1,0 +1,34 @@
+--- a/src/virtio/vulkan/vn_renderer.h
++++ b/src/virtio/vulkan/vn_renderer.h
+@@ -69,6 +69,7 @@
+    bool has_timeline_sync;
+    bool has_implicit_fencing;
+    bool has_guest_vram;
++   bool requires_memory_allocation_reply;
+ 
+    uint32_t max_timeline_count;
+ 
+--- a/src/virtio/vulkan/vn_renderer_vtest.c
++++ b/src/virtio/vulkan/vn_renderer_vtest.c
+@@ -892,6 +892,9 @@
+    info->has_external_sync = false;
+    info->has_timeline_sync = !VN_PERF(NO_TIMELINE_SYNC);
+    info->has_implicit_fencing = false;
++   /* A userspace renderer can reject an allocation (for example a context
++    * quota) without a kernel memory object tracking the failure for us. */
++   info->requires_memory_allocation_reply = true;
+ 
+    const struct virgl_renderer_capset_venus *capset = &vtest->capset.data;
+    info->wire_format_version = capset->wire_format_version;
+--- a/src/virtio/vulkan/vn_device_memory.c
++++ b/src/virtio/vulkan/vn_device_memory.c
+@@ -31,7 +31,8 @@
+ {
+    VkDevice dev_handle = vn_device_to_handle(dev);
+    VkDeviceMemory mem_handle = vn_device_memory_to_handle(mem);
+-   if (VN_PERF(NO_ASYNC_MEM_ALLOC)) {
++   if (VN_PERF(NO_ASYNC_MEM_ALLOC) ||
++       dev->renderer->info.requires_memory_allocation_reply) {
+       return vn_call_vkAllocateMemory(dev->primary_ring, dev_handle,
+                                       alloc_info, NULL, &mem_handle);
+    }

@@ -1,6 +1,8 @@
-# GPU console probes C1 / C2
+# GPU console probes C1 / C2 / C3 / C4
 
-Status: **C1, all three C2a sizes, and C2b completed.** Shared-SHM GPU import,
+Status: **C1, all three C2a sizes, C2b, and the initial C3 completed.** C4's
+first run stalled after the first asynchronous present; investigation and the
+corrected rerun are recorded below. Shared-SHM GPU import,
 GPU writes/readback, cross-process coherence, and in-app shared RADV execution
 passed. **App flexible headroom at the measured baseline was only 428,867,584
 bytes (409 MiB); SHM is counted against it.** The 1 GiB map failed ENOMEM.
@@ -396,6 +398,151 @@ separate explicit `sceAgcInit` return was not instrumented or claimed.
 | SOCK_SEQPACKET unsupported → framed SOCK_STREAM render front end | Socketpair PASSED in both plain and app C1; no availability-driven fallback needed from this result; bound sockets / protocol fd passing still require their own tests |
 
 GpudCore and VenusIcd received the loading, memory-type, quota and coherence
-results. These are **C-series probe results**, not an end-to-end Venus/vkr/vtest
-or presentation pass. No C3/C4 runs, optional all-flexible-BO option-f run,
-deliberate GPU-hang recovery test, or LKL-tree changes were performed here.
+results. The C1/C2 ladder alone was not an end-to-end Venus/vkr/vtest or
+presentation pass. No optional all-flexible-BO option-f run, deliberate GPU-hang
+recovery test, or LKL-tree changes were performed here.
+
+## C3 / G3 — Venus payload readback through the compositor
+
+All captures in this and the C4 sections are under
+`build/ps5/evidence/gpu/`. The initial bounded run used:
+
+```sh
+env/run python3 gpu-server/build.py ps5
+env/run env PS5WL_TEST_SECONDS=60 compositor/build.sh ps5
+launcher/test.sh --diagnostic-elf "$PWD/build/ps5/compositor/ps5wl"
+# From a second host observer, after the compositor's Wayland-ready line:
+tools/ps5ctl run build/ps5/vkcube-venus/ps5wl-vktest-venus.elf
+tools/ps5ctl logs --port 9591 --retry 10
+```
+
+The isolated diagnostic mode was chosen deliberately: it preserves resident
+installer 85, the home-screen icon, installed compositor/demo, RADV, and demo-only
+autostart manifest. The existing installed RADV was used, not a diagnostic
+replacement. The diagnostic still starts the real foreground compositor and
+the existing manifest autostarts the separate demo. No process is created from
+the app process: autostart requests go to the existing elfldr.
+
+`c3-{before,app-started,client-started,after}.log` contain successful process
+checks around the foreground/client launches and after completion. Foreground
+compositor PID 118, driver 117, demo 119 and Venus readback payload 120 all
+disappeared; only the expected installer 85 remained among project processes.
+Both diagnostic harness and client log observer exited **0**.
+
+Exact excerpts (`c3-client.log`, `c3-compositor.log`):
+
+```text
+[3714153 ms] ps5wl-vktest: device=Virtio-GPU Venus (PlayStation 5 GPU (RADV NAVI21)) vendor=1002 device=0000 api=1.4.307
+[3714173 ms] ps5wl-vktest: GPU readback words=16384 expected=1a2b3c4d first=1a2b3c4d mismatches=0
+[3714174 ms] ps5wl-vktest: RESULT PASS
+[3714148 ms] ps5wl-compositor: gpud: context created id=1 name=payload.elf contexts=1
+[3714151 ms] ps5wl-compositor: gpud: vkr: gpud host-pointer importable memory types: 0x20
+[3714173 ms] ps5wl-compositor: gpud: vkr: host-pointer blob: size=65536 (ordinary SHM fd; no Vulkan fd export)
+[3714175 ms] ps5wl-compositor: gpud: context destroyed id=1 resources_released=1 released_host_charge_bytes=8388608 released_device_charge_bytes=0 contexts=0
+[3773124 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[3773124 ms] ps5wl-compositor: gpud stop result=0
+[3774366 ms] ps5wl-launch-diag: diagnostic result=0 child=118
+```
+
+The lifecycle log is emitted after vkr destroys the context and its resources.
+The 8-MiB charge is a discarded transport-resource ledger charge, not a leaked
+allocation. Native clean-shutdown/backend-release lines and the driver's
+observed child disappearance establish the bounded foreground exit.
+
+## C4 / G4 — initial failure and host-first investigation
+
+The same bounded diagnostic artifact was used with the separate plain payload
+`build/ps5/vkcube-venus/ps5wl-vkcube-venus.elf`. Full logs:
+`c4-compositor.log`, `c4-client.log`, launch receipts and process snapshots
+`c4-*.log`. Driver 122 launched foreground compositor 123; demo 124 autostarted;
+cube 125 connected. The cube logged:
+
+```text
+[3794994 ms] ps5wl-vkcube: Vulkan prepare call completed
+[3795003 ms] ps5wl-vkcube: vkcube presented frame=1
+```
+
+No 60th or 600th cube frame was observed. The cube uses Venus's asynchronous
+present worker, so that first client counter is not proof of a completed image.
+There was no cube surface-buffer commit in the compositor log. The compositor's
+continuing 1920x1080 commit counters belonged to the demo and must not be counted
+as cube acceptance. Port-9531 readback `c4-first-frame.png` (6,240,291 bytes)
+was inspected: it shows the interactive checkerboard demo, **not a cube**.
+
+The compositor continued flipping until its 60-second timer and recorded:
+
+```text
+[3853987 ms] ps5wl-compositor: bounded hardware validation timeout; releasing VideoOut
+[3853988 ms] ps5wl-compositor: gpud: vkr: destroying context 1 (vkcube) with a valid instance
+[3853988 ms] ps5wl-compositor: gpud: vkr: destroying device with valid objects
+[3853989 ms] ps5wl-compositor: gpud: context destroyed id=1 resources_released=10 released_host_charge_bytes=43106304 released_device_charge_bytes=0 contexts=0
+[3853989 ms] ps5wl-compositor: gpud: gpud stopped: Vulkan fd-export calls=0
+[3853989 ms] ps5wl-compositor: gpud stop result=0
+[3854082 ms] ps5wl-compositor: direct release rc=0
+[3854082 ms] ps5wl-compositor: compositor clean shutdown
+[3855238 ms] ps5wl-launch-diag: diagnostic child=123 disappeared
+[3855238 ms] ps5wl-launch-diag: diagnostic result=0 child=123
+```
+
+The mandatory post-run `ps5ctl ps` then failed with connection refused
+(`c4-after.log`); all console actions stopped. Main subsequently reported no
+ping response. The user power-cycled and suspected idle auto power-down; that
+is a hypothesis, **not proof of either a GPU crash or an idle shutdown**.
+There is no captured GPU-fault message, wedged-drain log, or blocked teardown:
+vkr context destruction and gpud stop each completed within one millisecond.
+
+### Offline defects and constraints distinguished
+
+1. **FreeBSD thread-ID ABI defect.** The pinned Venus `vn_gettid` used
+   `syscall(SYS_thr_self)` without the required `long *` output argument.
+   SDK `sys/thr.h` declares `thr_self(long *)`, and `sys/sysproto.h` defines
+   `struct thr_self_args` with that pointer. Syscall status is not a thread ID.
+   WSI compares this value to distinguish the async present worker before
+   skipping queue flushes or releasing locks. Patch
+   `deps/mesa/venus-patches/0006-freebsd-thread-id.patch` supplies the pointer
+   and checks failure. This is a definite ABI defect and a C4-stall hypothesis;
+   the initial logs alone cannot identify the worker's exact blocking call.
+
+2. **Quota errors were lost by asynchronous Venus memory allocation.** The
+   added `gpu-server/tests/vtest-cube --sanitize --ps5-constraints` reproduces
+   1920x1080/128-MiB/two-context/no-external-fd conditions on host lavapipe.
+   The old client aborted after frame 1. Unlike the console, the host compositor
+   committed one cube image. Server evidence in `host-ps5-quota/server.log`:
+
+   ```text
+   quota rejected context=1 host=1 used=126173184 request=8306688 limit=134217728 allocations=20
+   vkr: failed to look up object 91 of type 8
+   vkr: vkBindBufferMemory2 resulted in CS error
+   ```
+
+   Venus's async `vkAllocateMemory` returned success before the renderer's
+   rejection, creating a phantom client handle. Patch
+   `0007-vtest-checked-memory-allocation.patch` requires actual allocation
+   replies for vtest. A real two-80-MiB-allocation regression
+   (`deps/mesa/tests/vtest-quota.py`) failed before the patch with SIGABRT/ring
+   fatal error (`quota-before.log`) and passed after it (`quota-after.log`):
+
+   ```text
+   quota allocations first=0 second=-1
+   quota recovery=0 RESULT PASS
+   ```
+
+   This does **not** establish console quota exhaustion. Lavapipe has one
+   host-visible memory type, charging optimal images as well as staging buffers
+   to the host quota. RADV's import mask is 0x20; other types are device-only.
+   The console exported four 8,306,688-byte staging blobs and had 43,106,304
+   bytes of retained host charges at teardown. Its 128-MiB quota was not raised.
+
+3. **Host-pointer mapping and lifetime review.** `vkr_shmem_import` aligns and
+   sizes imports to at least 16 KiB, then passes that same live SHM mapping in
+   `VkImportMemoryHostPointerInfoEXT`. RADV's `radv_ps5_buffer_from_ptr` checks
+   address/size bounds and requires `radv_ps5_memory_grant_gpu` success, which
+   calls `sceKernelMprotect` with CPU/GPU read/write bits before returning a BO.
+   An exported blob duplicates the SHM fd; it does not replace the GPU mapping.
+   These source paths do not support a hypothesis of intentionally unmapped
+   host memory. They do not rule out a RADV GPU fault on more complex draws.
+
+The corrected standard ASan/LSan/UBSan host suite passed after the core logging
+and Venus changes (`host-final-suite.log`): 120 presents, malformed/stalled-peer
+isolation, pipe waits, killed-client SHM baseline and two simultaneous clients.
+Full-HD and corrected console evidence follow below when exercised.

@@ -443,3 +443,23 @@ Device-memory defaults are 1 GiB per context. Allocation accounting includes
 blob-zero transport SHM, and Vulkan object creation has a 65,536-object limit.
 These host/build results do not establish PS5 shared-memory GPU import or
 coherence; those remain subject to the console experiment gates in PLAN.md.
+
+Context lifecycle logs include the active-context count and the resource and
+host/device quota charges discarded after vkr teardown. Those discarded charges
+include transport blobs and resources retained past `vkFreeMemory`; they are
+not leaked-byte measurements. Actual SHM descriptor/mapping release remains
+independently measured by the host killed-client regression. Quota rejection
+logs identify the context, memory class, used/requested bytes, limit and object
+count without changing the rejection policy.
+
+`gpu-server/tests/vtest-cube --sanitize --full-hd` raises presentation coverage
+to 600 frames at 1920×1080, including the killed-client and concurrent-client
+cases, with separate `sanitize-full-hd` logs. `--ps5-constraints` additionally
+uses the PS5 limits (128 MiB host bytes/context, two contexts) and keeps separate
+`sanitize-ps5` logs. This is a diagnostic reproduction configuration: lavapipe's
+single host-visible memory type charges optimal images against the host quota
+too, unlike PS5 RADV's device-only image memory. A full-HD lavapipe cube may
+therefore correctly run out of host quota. The independent real-Venus
+`deps/mesa/tests/vtest-quota.py` regression requires the OOM reply and successful
+allocation recovery on the same context, rather than hiding that difference by
+raising the console quota.

@@ -36,6 +36,7 @@ static bool started;
 static atomic_bool stopping;
 static uint64_t host_limit, device_limit;
 static atomic_uint_fast64_t fd_exports;
+static void logger(enum virgl_log_level_flags level, const char *message, void *opaque);
 void gpud_record_fd_export(void) { atomic_fetch_add(&fd_exports, 1); }
 uint64_t gpud_fd_export_count(void) { return atomic_load(&fd_exports); }
 bool gpud_memory_reserve(uint32_t id, bool host, uint64_t bytes)
@@ -47,6 +48,13 @@ bool gpud_memory_reserve(uint32_t id, bool host, uint64_t bytes)
         uint64_t limit = host ? host_limit : device_limit;
         if (bytes <= limit - *used && c->allocations < 65536) {
             *used += bytes; c->allocations++; ok = true;
+        } else {
+            char message[192];
+            snprintf(message, sizeof(message),
+                     "quota rejected context=%u host=%u used=%" PRIu64 " request=%" PRIu64
+                     " limit=%" PRIu64 " allocations=%u",
+                     id, host, *used, bytes, limit, c->allocations);
+            logger(VIRGL_LOG_LEVEL_ERROR, message, NULL);
         }
         break;
     }
@@ -114,6 +122,10 @@ uint32_t gpud_core_context_create(const char *name, gpud_retire_fn fn, void *opa
     c->next = contexts; contexts = c;
     pthread_mutex_unlock(&cb_lock);
     context_count++;
+    char message[256];
+    snprintf(message, sizeof(message), "context created id=%u name=%.160s contexts=%u",
+             c->id, name, context_count);
+    logger(VIRGL_LOG_LEVEL_INFO, message, NULL);
     pthread_mutex_unlock(&lock);
     return c->id;
 fail:
@@ -128,10 +140,18 @@ void gpud_core_context_destroy(uint32_t id)
     while (*p && (*p)->id != id) p = &(*p)->next;
     if (*p) {
         struct context *c = *p;
+        unsigned resources = 0;
         while (c->resources) {
             struct resource *r = c->resources; c->resources = r->next; free(r);
+            resources++;
         }
+        char message[256];
+        snprintf(message, sizeof(message),
+                 "context destroyed id=%u resources_released=%u released_host_charge_bytes=%" PRIu64
+                 " released_device_charge_bytes=%" PRIu64 " contexts=%u",
+                 id, resources, c->host_bytes, c->device_bytes, context_count - 1);
         *p = c->next; free(c); context_count--;
+        logger(VIRGL_LOG_LEVEL_INFO, message, NULL);
     }
     pthread_mutex_unlock(&cb_lock);
     pthread_mutex_unlock(&lock);

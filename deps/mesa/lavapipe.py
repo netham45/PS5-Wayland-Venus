@@ -46,14 +46,15 @@ def llvm_config(target):
     prefix = ROOT / 'build/llvm/ps5/sysroot'
     wrapper.write_text('#!/usr/bin/env python3\nimport subprocess, sys\n'
                        'args = sys.argv[1:]\n'
-                       'if "--system-libs" in args:\n    print("-lpthread")\n'
-                       'elif "--host-target" in args:\n    print("x86_64-sie-ps5")\n'
-                       'else:\n'
-                       f'    out = subprocess.check_output([{str(host / "bin/llvm-config")!r}] + args, text=True)\n'
-                       f'    out = out.replace({str(host / "include")!r}, {str(prefix / "include")!r})\n'
-                       f'    out = out.replace({str(host / "lib")!r}, {str(prefix / "lib")!r})\n'
-                       f'    out = out.replace({str(ROOT / "build/llvm/sources" / mesa.PINS["llvm"]["source_dir"] / "llvm/include")!r}, {str(prefix / "include")!r})\n'
-                       '    print(out, end="")\n')
+                       'system_libs = "--system-libs" in args\n'
+                       'args = [arg for arg in args if arg != "--system-libs"]\n'
+                       f'out = subprocess.check_output([{str(host / "bin/llvm-config")!r}] + args, text=True) if args else ""\n'
+                       f'out = out.replace({str(host / "include")!r}, {str(prefix / "include")!r})\n'
+                       f'out = out.replace({str(host / "lib")!r}, {str(prefix / "lib")!r})\n'
+                       f'out = out.replace({str(ROOT / "build/llvm/sources" / mesa.PINS["llvm"]["source_dir"] / "llvm/include")!r}, {str(prefix / "include")!r})\n'
+                       'out = out.replace("x86_64-unknown-linux-gnu", "x86_64-sie-ps5")\n'
+                       'if system_libs:\n    out += " -lpthread\\n"\n'
+                       'print(out, end="")\n')
     wrapper.chmod(0o755)
     return wrapper
 
@@ -66,7 +67,7 @@ def build(target):
     prefix = mesa.BASE / (target + '-lavapipe/sysroot')
     dependency_prefix = ROOT / 'build' / target / 'sysroot'
     env = os.environ.copy()
-    env.update(CC='clang', CXX='clang++', LLVM_CONFIG=str(llvm_config(target)),
+    env.update(CC='clang', CXX='clang++',
                PKG_CONFIG_PATH='', PKG_CONFIG_DIR='', PKG_CONFIG_LIBDIR=os.pathsep.join(
                    str(dependency_prefix / p) for p in ['lib/pkgconfig', 'share/pkgconfig']))
     env.pop('PKG_CONFIG_SYSROOT_DIR', None)
@@ -82,12 +83,14 @@ def build(target):
         '-Dbuild-tests=false', '-Dvulkan-layers=', '-Dvideo-codecs=',
         '-Dshader-cache=disabled', '-Dmesa-clc=auto',
     ]
+    llvm_machine = mesa.BASE / (target + '-lavapipe-llvm.ini')
+    llvm_machine.write_text('[binaries]\nllvm-config = ' + repr(str(llvm_config(target))) + '\n')
     if target == 'ps5':
-        cross = mesa.BASE / 'ps5-lavapipe-llvm.ini'
-        cross.write_text('[binaries]\nllvm-config = ' + repr(str(llvm_config(target))) + '\n')
-        options += ['--cross-file', ROOT / 'build/ps5/cross.ini', '--cross-file', cross,
+        options += ['--cross-file', ROOT / 'build/ps5/cross.ini', '--cross-file', llvm_machine,
                     '--native-file', ROOT / 'build/ps5/native.ini',
                     '-Dcpp_args=-I' + str(dependency_prefix / 'include')]
+    else:
+        options += ['--native-file', llvm_machine]
     binary = mesa.configure(target + '-lavapipe', src, options, env)
     mesa.run(['meson', 'compile', '-C', binary, '-j', mesa.JOBS], env=env)
     mesa.run(['meson', 'install', '-C', binary, '--no-rebuild'], env=env)

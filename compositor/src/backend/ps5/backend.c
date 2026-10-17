@@ -3,6 +3,7 @@
  * Copyright (C) 2026 John Törnblom. See LICENSE.SDL. */
 #include "ps5.h"
 #include "ps5log.h"
+#include "power.h"
 #include <drm_fourcc.h>
 #include <sys/event.h>
 #include "tiling.h"
@@ -40,6 +41,7 @@ struct ps5_backend {
  struct ps5_video_buffer buffers[2];
  struct kevent *queue;
  struct wl_event_source *flip_source;
+ struct wl_event_source *power_source;
  pthread_t thread;
  atomic_bool stopping;
  unsigned next, pending_index, displayed, commit_seq;
@@ -177,6 +179,11 @@ static void first_frame(void *data) {
  struct ps5_backend *b = data;
  wlr_output_send_frame(&b->output);
 }
+static int refresh_power(void *data) {
+ struct ps5_backend *b = data;
+ ps5_power_refresh("periodic");
+ return wl_event_source_timer_update(b->power_source, 10000);
+}
 static bool backend_start(struct wlr_backend *base) {
  struct ps5_backend *b = wl_container_of(base, b, base);
  if (pthread_create(&b->thread, NULL, flip_thread, b)) return false;
@@ -204,6 +211,7 @@ static bool backend_start(struct wlr_backend *base) {
 static void backend_destroy(struct wlr_backend *base) {
  struct ps5_backend *b = wl_container_of(base, b, base);
  atomic_store(&b->stopping, true);
+ if (b->power_source) wl_event_source_remove(b->power_source);
  /* Close before joining: cancellation of VideoOut must not depend on the
   * waiter returning. This follows SDL close-before-equeue-delete ordering. */
  if (b->registered) ps5log("UnregisterBuffers rc=%#x", sceVideoOutUnregisterBuffers(b->video, 0));
@@ -259,6 +267,12 @@ struct wlr_backend *ps5_backend_create(struct wl_display *display) {
  wlr_output_state_finish(&state);
  wlr_output_set_name(&b->output, "PS5-TV-1");
  wlr_output_set_description(&b->output, "PS5 VideoOut 1920x1080 60 Hz");
+ ps5_power_refresh("startup");
+ b->power_source = wl_event_loop_add_timer(b->loop, refresh_power, b);
+ if (!b->power_source || wl_event_source_timer_update(b->power_source, 10000)) {
+  ps5log("power keepalive timer initialization failed errno=%d", errno);
+  goto fail;
+ }
  ps5log("HideSplashScreen rc=%#x", sceSystemServiceHideSplashScreen());
  b->video = sceVideoOutOpen(0xff, 0, 0, NULL);
  ps5log("VideoOut SYSTEM open=%#x", b->video);

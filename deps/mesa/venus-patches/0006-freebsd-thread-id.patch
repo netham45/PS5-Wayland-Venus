@@ -1,0 +1,17 @@
+--- a/src/virtio/vulkan/vn_common.h
++++ b/src/virtio/vulkan/vn_common.h
+@@ -645,7 +645,13 @@
+ #if DETECT_OS_ANDROID
+    return gettid();
+ #elif DETECT_OS_FREEBSD
+-   return syscall(SYS_thr_self);
++   /* FreeBSD returns the thread ID through an output pointer, not the
++    * syscall result.  WSI uses this identity to distinguish its present
++    * worker from callers before releasing queue and swapchain locks. */
++   long tid;
++   if (syscall(SYS_thr_self, &tid) != 0)
++      abort();
++   return (pid_t)tid;
+ #elif DETECT_OS_WINDOWS
+    return GetCurrentThreadId();
+ #else

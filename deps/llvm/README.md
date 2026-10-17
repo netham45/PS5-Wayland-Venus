@@ -43,7 +43,12 @@ For cross dependency discovery, `deps/mesa/lavapipe.py` generates a build-host
 `llvm-config` adapter: component closures come from the identical native X86
 build, include/library paths point at the PS5 install and target system
 libraries are `-lpthread` (math comes from the SDK's default libc link).
+Combined queries such as `--libs --ldflags --system-libs` retain the complete
+LLVM component closure while replacing only the target system libraries.
 No target executable is run by Meson.
+The adapter is selected through Meson's machine file, not `LLVM_CONFIG` in
+the process environment: SDK compiler wrappers use that environment variable
+to locate their own compiler binaries and must retain the container's value.
 
 ## Executable memory source review
 
@@ -80,3 +85,30 @@ After `env/run clients/vkcube/build.sh host --driver lavapipe`, the command
 The independently captured headless ps5wl log reported `Created shm allocator`
 and `client surface committed 500x500 count=120`. No GPU server was launched.
 
+
+## Observed PS5 LLVM cross build (2026-10-16)
+
+`env/run python3 deps/llvm/build.py ps5` completed (exit 0), including all
+upstream `SmallVector.cpp` layout assertions. The static archives are installed
+under `build/llvm/ps5/sysroot/lib`; both `libLLVMMCJIT.a` and `libLLVMOrcJIT.a`
+were built. CMake's target compiler is the repository's
+`cross/bin/prospero-clang++`, not the unwrapped SDK compiler. The runtime page
+size configuration found `getpagesize`; no 4 KiB override was added.
+
+`env/run python3 deps/mesa/lavapipe.py ps5` and
+`env/run clients/vkcube/build.sh ps5 --driver lavapipe` also completed (exit 0).
+The payload driver is
+`build/mesa/ps5-lavapipe/sysroot/lib/libvulkan_lvp.so`; its only `DT_NEEDED`
+entries are `libkernel_web.sprx` and `libSceLibcInternal.sprx`, not LLVM, RADV,
+AGC or a GPU server library. Its dynamic exports include `vkCreateInstance`,
+`vkGetInstanceProcAddr`, `vkGetDeviceProcAddr`, `vkCreateSwapchainKHR` and
+`vkQueuePresentKHR`.
+
+The standalone client is
+`build/ps5/vkcube-lavapipe/ps5wl-vkcube-lavapipe.elf`, with its driver embedded
+and a default of 600 frames; the readback client is
+`build/ps5/vkcube-lavapipe/ps5wl-vktest-lavapipe.elf`. Both link through
+`cross/bin/prospero-clang`. The cube extracts its own driver to
+`/data/ps5wl/libvulkan-lavapipe.so.1` and logs on port 9590.
+The PS5 compositor's xdg configure maximizes the cube to 1920x1080; the
+500x500 host acceptance is not a PS5 runtime or timing result.

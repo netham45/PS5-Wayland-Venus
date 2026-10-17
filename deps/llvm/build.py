@@ -54,7 +54,7 @@ def build(target, src):
         '-DLLVM_INCLUDE_BENCHMARKS=OFF', '-DLLVM_BUILD_TOOLS=OFF',
         '-DLLVM_ENABLE_RTTI=OFF', '-DLLVM_ENABLE_EH=OFF',
         '-DLLVM_ENABLE_BINDINGS=OFF', '-DLLVM_INCLUDE_UTILS=OFF',
-        '-DLLVM_TOOL_LTO_BUILD=OFF', '-DLLVM_TOOL_REMARKS_BUILD=OFF',
+        '-DLLVM_TOOL_LTO_BUILD=OFF',
         '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++',
     ]
     if target == 'ps5':
@@ -62,7 +62,6 @@ def build(target, src):
             '-DCMAKE_TOOLCHAIN_FILE=' + str(ROOT / 'cross/prospero.cmake'),
             '-DLLVM_HOST_TRIPLE=x86_64-sie-ps5', '-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-sie-ps5',
             '-DLLVM_TABLEGEN=' + str(BASE / 'host/bin/llvm-tblgen'),
-            '-DLLVM_NATIVE_TOOL_DIR=' + str(BASE / 'host/bin'),
             '-DLLVM_ENABLE_PIC=ON', '-DLLVM_ENABLE_THREADS=ON',
         ]
     fresh = [] if (binary / 'build.ninja').exists() else ['--fresh']
@@ -84,8 +83,7 @@ def main():
         raise SystemExit('Run through env/run python3 deps/llvm/build.py TARGET')
     os.environ.setdefault('PS5_PAYLOAD_SDK', str(ROOT / '.sdk'))
     src = prepare()
-    if not (BASE / 'host/sysroot/lib/libLLVMCore.a').exists():
-        build('host', src)
+    build('host', src)
     if args.target == 'ps5':
         build('ps5', src)
 
