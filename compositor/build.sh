@@ -38,7 +38,8 @@ if [[ $MODE == ps5 ]]; then
     source "$ROOT/toolchain/env.sh"
     "$ROOT/cross/bootstrap-compat.sh"
     cross_signature=$(sha256sum "$ROOT/build/ps5/cross.ini" "$ROOT/build/ps5/native.ini" \
-        "$ROOT/cross/compiler.sh" "$ROOT/build/ps5/runtime/libps5wl-fd-compat.a")
+        "$ROOT/cross/compiler.sh" "$ROOT/cross/public-loader.dyn" \
+        "$ROOT/build/ps5/runtime/libps5wl-fd-compat.a")
     args+=(--cross-file "$ROOT/build/ps5/cross.ini" --native-file "$ROOT/build/ps5/native.ini" --default-library=static)
     args+=("-Dconsole_test_seconds=${PS5WL_TEST_SECONDS:-0}")
     args+=("-Dvideoout_only=${PS5WL_VIDEOOUT_ONLY:-false}")

@@ -786,10 +786,12 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 			toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id : "(unset)");
 	} else if (toplevel->xdg_toplevel->base->surface->current.buffer) {
 		if (++toplevel->commits == 1 || toplevel->commits % 120 == 0) {
-			wlr_log(WLR_INFO, "client surface committed %dx%d count=%u",
+			wlr_log(WLR_INFO, "client surface committed %dx%d count=%u app_id=%s title=%s",
 				toplevel->xdg_toplevel->base->surface->current.width,
 				toplevel->xdg_toplevel->base->surface->current.height,
-				toplevel->commits);
+				toplevel->commits, toplevel->xdg_toplevel->app_id ?
+				toplevel->xdg_toplevel->app_id : "(unset)",
+				toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title : "(unset)");
 		}
 	}
 }

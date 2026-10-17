@@ -1,13 +1,15 @@
 # GPU console probes C1 / C2 / C3 / C4
 
-Status: **C1, all three C2a sizes, C2b, and current corrected C3 completed.**
+Status: **C1, all three C2a sizes, C2b, and corrected C3 completed.**
 Both power-disabled A and PowerTick/getter-only B passed readback and clean
-shutdown. Corrected **C4 still stalls after its first asynchronous present**;
-its post-shutdown process check lost connectivity. After user recovery, L5
-failed at `vkCreateInstance` without losing console connectivity. The final
-refreshed installation is not accepted. Shared-SHM GPU import,
-GPU writes/readback, cross-process coherence, and in-app shared RADV execution
-passed. **App flexible headroom at the measured baseline was only 428,867,584
+shutdown. **C4 is not yet accepted:** later guarded runs remain responsive,
+and localized its first-present stall to the SDK's invalid zero-timeout ppoll
+result before the CPU-image copy. L5's extended fault capture identified an
+LLVM public-loader binding defect during device creation; its source fix is
+built but not yet console-accepted. The final refreshed installation is not
+accepted. Shared-SHM GPU import, GPU writes/readback, cross-process coherence,
+and in-app shared RADV execution passed.
+**App flexible headroom at the measured baseline was only 428,867,584
 bytes (409 MiB); SHM is counted against it.** The 1 GiB map failed ENOMEM.
 Main treated this as the expected §6 quota gate and authorized the remaining
 measurements; it was not retried. All runs had separate Backend grants.
@@ -846,3 +848,255 @@ before another attempt. Both the failure process snapshot and the final
 post-diagnostic `ps` were responsive. Diagnostic harness exit **0**, no app,
 demo, cube or helper left; Payload Manager 83 and elfldr 81 remained.
 Thus this run is **not an L5 pass** and did not reproduce the C4 console loss.
+
+### Guarded Venus fence trace — CPU presentation remains stalled
+
+The guarded teardown (`core/patches/0002-safe-teardown.patch`) and queue-fence
+trace (`0003-sync-trace.patch`) were exercised with bounded compositor SHA256
+`ae323b9f10695ca1cb72487c3b87e8353d2983524c445e8c58db9a6eb4cd550f`.
+Evidence: `build/ps5/evidence/gpu/venus-trace-*.log`, compositor101, demo102,
+cube103. The receipt-owned cube was killed at approximately eight seconds,
+well before the compositor's 60-second exit. Nonzero queue-ring fences1–5
+submitted, host waits returned0, and vtest retire/wait-pipe signaling completed.
+The client stopped after:
+
+```text
+[1079983 ms] ps5wl-vkcube: vkcube presented frame=1
+[1079987 ms] ps5wl-vkcube: Venus: sync-trace wsi-fence-wait-end result=0
+[1079987 ms] ps5wl-vkcube: Venus: sync-trace wsi-flush-lock-end queue=880cafdc0
+```
+
+There was no `wsi-common-present-end`, frame60 or frame600. The observed GPU
+fence retired; the unresolved interval is the CPU path after that wait, not
+an observed unretired queue fence. Killed-client teardown's DeviceWaitIdle
+returned0 in0ms and released10 resources/43,106,304 host-charge bytes.
+The compositor logged `gpud stop result=0`, `Vulkan fd-export calls=0`,
+`compositor clean shutdown`, and driver `diagnostic result=0 child=101`.
+The final process snapshot was responsive with no remaining app/client/helper.
+This is a contained diagnostic result, **not G4 presentation acceptance**.
+
+Before this run, both `env/run gpu-server/tests/vtest-cube --sanitize
+--sync-trace` and the `--full-hd` variant passed, including 600-frame
+1920×1080 presentation, killed-client SHM cleanup and concurrent clients.
+Logs: `trace-host-{120,600}-suite.log` in the same evidence directory.
+
+### L5 corrected instance and first native fault capture
+
+After the C11 symbol-rename fix, instance and Wayland-surface initialization
+completed, but the standalone lavapipe cube faulted before device creation.
+`build/ps5/evidence/gpu/l5-fault-client.log` records PID98:
+
+```text
+[847467 ms] ps5wl-vkcube: Vulkan instance and Wayland connection initialized
+[847469 ms] ps5wl-vkcube: Vulkan Wayland surface created
+Vulkan fatal signal=000000000000000b fault_address=0000000000000000 rip=000000082882448d rsp=00000007efabf980 trap=000000000000000c error=0000000000000004 native_mc_len=0000000000000480 driver_base=0000000000000000
+```
+
+The earlier `dladdr` lookup failed; driver_base0 in this record is not the
+actual load bias. The logged `vkGetInstanceProcAddr` address0x204d20000 and
+that symbol's zero ELF offset establish the load bias for this driver.
+RIP0x82882448d is outside its executable text. No system-module attribution,
+JIT, TLS or stack-size cause is established by this first capture. Zero
+presents and no cube PNG: **L5 remains unaccepted**.
+
+### Post-wait localization and full C11 audit (2026-10-16)
+
+The relevant `compile_commands.json` entries all include
+`-DC11_THREADS_RENAME`:101 C11/util/WSI source files each in the PS5 Venus and
+RADV builds,104 in the PS5 lavapipe build. Offline objdump of the linked Venus
+and RADV libraries found230 and693 C11 call/jump sites respectively, all
+targeting `mesa_*`, not SDK `mtx_*`/`cnd_*`/`thrd_*`/`tss_*`/`call_once`.
+The linked plain `mesa_mtx_init` returns0; `u_cnd_monotonic_timedwait` directly
+calls pthread_cond_timedwait and maps native ETIMEDOUT60 to Mesa thrd_timedout1,
+success to0, other errors to2. This rules out the previously demonstrated
+lavapipe SDK-success4 collision in these observed Venus/RADV callsites.
+
+Venus patches0009/0010 add postwait lock/reset, common CPU-fence, platform
+present, Wayland-dispatch and shm-copy stages. Both driver targets and client
+targets rebuilt successfully, then `env/run gpu-server/tests/vtest-cube
+--sanitize --full-hd --sync-trace` passed600 frames plus killed-client baseline
+and concurrent-client coverage (build output `artifact://1047`, suite logs
+`build/gpud/logs/sanitize-full-hd-trace/`).
+
+The single bounded postwait hypothesis run used the same guarded60-second
+compositor, driver106/compositor107/demo108/cube109; the session keepalive105
+was killed before it. Logs: `build/ps5/evidence/gpu/postwait-*.log`.
+
+```text
+[1952495 ms] ps5wl-vkcube: Venus: sync-trace wsi-relock-chains-end
+[1952496 ms] ps5wl-vkcube: Venus: sync-trace wsi-relock-queue-end
+[1952498 ms] ps5wl-vkcube: Venus: sync-trace wsi-fence-reset-end result=0
+[1952499 ms] ps5wl-vkcube: Venus: sync-trace wsi-cpu-fence-wait-end
+[1952500 ms] ps5wl-vkcube: Venus: sync-trace wsi-platform-present-begin
+[1952501 ms] ps5wl-vkcube: Venus: sync-trace wsi-wl-present-dispatch-begin
+```
+
+There was no dispatch-end or copy-begin: **the first stall is inside the
+presentation-ID queue dispatcher, before the wl_shm memcpy**. Both Venus
+chain/queue reacquisitions, reset, and common CPU staging fence wait completed.
+Cube109 was killed at8.000s and disappeared; compositor107 survived, drained,
+and completed its bounded diagnostic with result0. The final `postwait-after`
+process snapshot was responsive with only manager83/elfldr81 among project
+services. Still only one asynchronous client present; no cube PNG or G4 pass.
+
+### L5 extended capture — system module and LLVM caller identified
+
+`clients/vkcube/runtime.c` now publishes saved registers using a shared
+lock-free ready atomic (release store/acquire load), not fences without a
+shared synchronization object. The diagnostic client and LLVM/Mesa retain
+frame pointers. Embedded driver SHA256:
+`0ca4345306c1ca442f77555cc43e605bdc9babfcc79a427632bab20bd63043b1`.
+The extended bounded run used compositor112/demo113/cube114. Logs:
+`build/ps5/evidence/gpu/l5-extended-{client,compositor,postclient,after}.log`.
+
+```text
+Vulkan module base=204630000 size=0x3b4c000 path=/data/ps5wl/libvulkan-lavapipe.so.1
+Vulkan module base=823800000 size=0x1c0000 path=/system/common/lib/libSceLibcInternal.sprx
+Vulkan fatal signal=000000000000000b fault_address=0000000000000000 rip=000000082380448d rsp=00000007efbd3980 trap=000000000000000c error=0000000000000004 native_mc_len=0000000000000480 driver_base=0000000204630000
+Vulkan RIP bytes 000000082380448d c5f96f104883c010c5e974c1c4e27917
+Vulkan extended fault capture complete
+```
+
+RIP is **libSceLibcInternal+0x448d**, a vector load from RAX0 in the strlen
+implementation. The collector recorded all18 registers,64 code bytes,
+256 stack bytes and15 frame records. Offline symbolization is retained in
+`l5-extended-symbolized.log`: strlen(NULL) ←
+`std::__1::string::__assign_external(const char *)` (ICD+0x1f88d5) ←
+`llvm::sys::DynamicLibrary::getPermanentLibrary` (+0x1f4535d) ←
+`llvm::EngineBuilder::create` (+0xf50cd3) ←
+`lp_build_create_jit_compiler_for_module` ← `gallivm_compile_module` ←
+`compile_function` ← `compile_jit_size_function` ←
+`llvmpipe_init_sampler_matrix` ← `llvmpipe_create_context` ←
+`lvp_queue_init` ← `lvp_CreateDevice`.
+
+LLVM's process-symbol-library dlopen(NULL) calls the ICD's SDK-local dlopen
+wrapper under `-Bsymbolic`; its weak private `__dlopen` hook is unresolved.
+That wrapper returns NULL, and its similarly unbound dlerror wrapper returns
+NULL, which LLVM assigns into std::string. This is a loader-binding defect,
+not observed JIT execution, stack exhaustion or a demonstrated TLS failure.
+Lavapipe's narrow public-loader binding fix is tracked in its driver patches;
+no null-string suppression was applied. The faulting client exited itself;
+the compositor survived and ended with diagnostic result0; final ps remained
+responsive. Still zero presents/no L5 PNG at this diagnostic.
+
+### Present-ID dispatcher and raw ppoll source defect
+
+Patch0011 separates the initial present-ID mutex, condition wait and Wayland
+loader call. Both Venus targets/clients rebuilt and the full-HD sanitized
+600-frame/concurrent/killed-client suite passed again (`artifact://1059`).
+Single bounded run119 stopped at:
+
+```text
+[2334083 ms] ps5wl-vkcube: Venus: sync-trace wsi-wl-id-lock-end
+[2334083 ms] ps5wl-vkcube: Venus: sync-trace wsi-wl-loader-dispatch-begin
+```
+
+No condition wait occurred. The loader was called with an already-expired
+absolute deadline, hence zero relative timeout. Cube119 was killed at8s,
+compositor117 survived and exited with diagnostic result0; process checks
+were responsive (`dispatch-*.log`).
+
+Offline objdump shows ppoll in the PS5 Venus ICD is the SDK's raw syscall545
+stub, with no timeout conversion or carry/error normalization. An independent
+plain no-GPU payload126 proved its zero-timeout behavior is invalid:
+
+```text
+[2569979 ms] ps5wl-dispatch-probe: ppoll zero-empty BEGIN pid=126
+[2569979 ms] ps5wl-dispatch-probe: ppoll zero-empty END result=3 errno=3 revents=0
+```
+
+Evidence: `ppoll-raw-{client,run,before,after}.log`, reproduction source
+`ps5wl-dispatch-probe.c` under the same evidence directory. A single empty
+pipe can never have three ready descriptors. **[INFERENCE]** Wayland interprets
+this positive native error as readiness, receives no events, prepares again
+and repeats forever instead of timing out. The earlier `dispatch-probe`
+foreground attempt exited too quickly on this unexpected positive return for
+its logs to be pulled; the corrected early-error log linger enabled the plain
+reproduction above. It is not counted as a passing test.
+
+The PS5 backend's BUFFER path submits a flip even with empty damage and sends
+`presented=true` with the saved commit sequence and flip timestamp on completion
+(`backend.c:73-117,141-175`). Idle re-flips intentionally have no new commit
+presentation; no-BUFFER state changes return without a present event. The
+observed first Venus stall precedes the shm copy, attach/commit and any
+presentation-feedback request, so missing later feedback cannot explain this
+specific zero-timeout dispatch failure.
+
+The native system-module `pselect` export was probed separately without a
+foreground app. Payload127 observed zero for an empty pipe with zero timeout,
+one for a readable pipe, and zero after a measured 30,121,332 ns for a 30 ms
+timeout. A temporarily unblocked pending SIGUSR1 interrupted the wait with
+`-1/EINTR`; the original blocked mask was restored. Immediate handler count
+was zero with a process-directed signal and a concurrent logger thread, so
+that capture alone does not prove delivery to the waiting thread. The
+central compatibility regression must use a thread-directed signal to make
+that assertion. Native exports included pselect/poll/select; no
+sceKernelPselect/Ppoll/Poll export was found. Evidence:
+`pselect-probe-{build,run,client,before,after}.log`. The console remained
+responsive after the probe; no C4/L5 render acceptance follows from it.
+
+A second native probe129 removed that ambiguity by sending SIGUSR1 with
+`pthread_kill(pthread_self(), SIGUSR1)`: send returned0, native pselect returned
+`-1/EINTR`, the handler ran once, and the original blocked signal mask was
+restored. Zero-empty, finite-empty and ready cases again returned0/0/1;
+finite wait was30,130,714ns for requested30ms. Evidence:
+`pselect-thread-{client,before,run,after}.log`. This proves the native primitive,
+not the still-pending central ppoll wrapper. Before/after process checks were
+responsive; only the explicitly started idle keepalive128 remained.
+
+The native `sceKernelDlsym` API did **not** implement the SDK CRT lookup
+contract: probe130 returned `0x80020003` and null for poll with handles1 and
+0x2001. Reading [SDKv0.44's KERNEL_DLSYM macro](https://github.com/ps5-payload-dev/sdk/blob/v0.44/crt/kernel.h) identified its privileged
+`kernel_dynlib_dlsym(-1, handle, name)` helper instead. Probe131 proved
+`kernel_dynlib_dlsym(-1,1,"poll")` returned the identical native poll address
+as the payload root's public dlsym; handle0x2001 returned null.
+`kernel_dynlib_handle(-1,"libkernel_sys.sprx",&handle)` independently returned
+handle1. Evidence: `native-poll-handle-*.log` and
+`privileged-poll-handle-*.log`; all before/after checks remained responsive.
+Those helpers work in a payload with its SDK CRT; a minimal `-shared
+-Bsymbolic --no-undefined` link then failed on undefined kernel_dynlib_dlsym
+because shared objects omit that CRT. They are therefore not the central
+ICD resolver. No private CRT hooks are exported.
+
+Probe132 then proved a public, handle-specific resolver with a real payload
+poll interposer. `dlsym(RTLD_DEFAULT,"poll")` returned that interposer;
+`dlopen("/system/common/lib/libkernel_sys.sprx",RTLD_NOW|RTLD_LOCAL)` followed
+by `dlsym(handle,"poll")` returned the identical native function as the
+independent privileged root-payload lookup. Calling the handle-resolved
+function returned0 for an empty pipe and1/POLLIN for a readable pipe, errno0
+in both cases. Evidence: `native-module-poll-{client,run,before,after}.log`
+and `ps5wl-native-poll-probe.c`. Console checks remained responsive. The
+central shared-link public-loader binding exception must use this
+explicit-module lookup, not SDK-unsupported RTLD_NEXT or a global poll
+lookup that re-enters epoll-shim.
+
+### Central ppoll cutover — real shared-object console regression
+
+The compatibility proxy now wraps ppoll and applies
+`cross/public-loader.dyn` to PS5 shared links. It preserves `-Bsymbolic`
+except for the five public dl* functions, which must bind to the payload
+loader rather than SDK-local wrappers with unbound private hooks. Both Mesa
+and compositor build fingerprints include that binding-list content and the
+injected archive. The unmasked WSI path calls cached, explicitly resolved
+native poll without allocation, copying or a helper thread.
+
+Payload133 loaded a real `-Bsymbolic --no-undefined` DSO built against the
+canonical archive. Its root poll interposer deliberately returned ELOOP on
+the calling thread during the regression; logger transport used another
+thread. The DSO returned test result0 after zero/finite empty timeouts,
+readiness, duplicate descriptors, POLLNVAL, events0/POLLHUP, thread-directed
+pending-signal interruption with handler1 and restored mask, a masked
+blocking writer-readiness wait and a masked finite timeout. Thus accidental
+root poll re-entry would not pass. The diagnostic root's final DSO dlclose
+returned-1; the payload then exited normally. Evidence:
+`ppoll-dso-{client,run,before,after,upload}.log`,
+`ppoll-console-dso.c` and `ps5wl-native-poll-probe.c`. Before/after console
+checks remained responsive. This is compatibility acceptance, not a Vulkan
+render acceptance.
+
+The required host preflight then available before the next Venus run passed:
+`env/run gpu-server/tests/vtest-cube --sanitize --full-hd --sync-trace`,
+600 frames, concurrent clients and killed-client SHM baseline in102.24s.
+Evidence: `central-fix-host-preflight.log` and
+`build/gpud/logs/sanitize-full-hd-trace/`. Compositor commit counters now also
+include xdg app ID and title; host vkcube is explicitly `title=vkcube`.

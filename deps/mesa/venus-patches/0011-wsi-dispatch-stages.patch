@@ -1,0 +1,42 @@
+From: ps5wl contributors
+Subject: [PATCH] wsi: distinguish present-ID locking from Wayland reads
+
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -2660,15 +2660,19 @@
+     * so there should be no problem locking without timeout.
+     * We would like to be able to support timeout = 0 to query the current max_completed count.
+     * A timedlock with no timeout can be problematic in that scenario. */
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-lock-begin");
+    err = mtx_lock(&chain->present_ids.lock);
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-lock-end");
+    if (err != thrd_success)
+       return VK_ERROR_OUT_OF_DATE_KHR;
+ 
+    /* Someone else is dispatching events; wait for them to update the chain
+     * status and wake us up. */
+    if (chain->present_ids.dispatch_in_progress) {
++      wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-cond-wait-begin");
+       err = u_cnd_monotonic_timedwait(&chain->present_ids.list_advanced,
+                                       &chain->present_ids.lock, end_time);
++      wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-cond-wait-end");
+       mtx_unlock(&chain->present_ids.lock);
+ 
+       if (err == thrd_timedout)
+@@ -2691,11 +2695,15 @@
+     */
+    mtx_unlock(&chain->present_ids.lock);
+ 
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-loader-dispatch-begin");
+    ret = loader_wayland_dispatch(wl_display,
+                                  chain->present_ids.queue,
+                                  end_time);
+-
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-loader-dispatch-end");
++
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-relock-begin");
+    mtx_lock(&chain->present_ids.lock);
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-id-relock-end");
+ 
+    /* Wake up other waiters who may have been unblocked by the events
+     * we just read. */

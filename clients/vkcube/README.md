@@ -219,3 +219,17 @@ in `deps/mesa/README.md`. For the matching server, `gpu-server/tests/vtest-cube
 be submitted, successfully waited, and retired through the vtest callback,
 plus completed WSI fence/present stages and wait-pipe signaling. Add `--full-hd`
 for the existing 600-frame 1920×1080 and killed/concurrent-client coverage.
+
+`build.sh ps5 --driver lavapipe --fault-trace` additionally builds a diagnostic
+client with frame pointers and a pre-created fault collector. Before Vulkan
+initialization it logs the SDKv0.44 rtld module graph (including the explicit
+RTLD_LOCAL driver handle, which `dladdr` cannot find through the root graph).
+On a fatal signal the handler publishes the saved GPRs through a lock-free
+release/acquire ready flag, wakes the collector through a pipe, and waits at
+most three monotonic seconds. Outside signal context the collector records all
+18 saved register values,64 instruction bytes,256 stack bytes and up to16
+frame-pointer returns using bounded, page-split `kernel_proc_copyout` reads.
+It uses only the emergency logging sink, avoiding stdio/logger locks that the
+faulting thread might own. Normal builds do not create this collector.
+For useful driver-side frame chains, rebuild LLVM and lavapipe using their
+documented PS5 frame-pointer configuration before embedding the driver.

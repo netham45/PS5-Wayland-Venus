@@ -1,0 +1,35 @@
+From: ps5wl contributors
+Subject: [PATCH] venus: identify post-fence chain, queue and reset stalls
+
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -445,14 +445,28 @@
+    if (VN_DEBUG(WSI))
+       vn_log(dev->instance, "sync-trace wsi-fence-wait-end result=%d", result);
+ 
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-relock-chains-begin");
+    vn_wsi_chains_lock(dev, queue->async_present.info, /*all=*/false);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-relock-chains-end");
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-relock-queue-begin enabled=%d",
++             can_unlock_queue);
+    if (can_unlock_queue)
+       simple_mtx_lock(&queue->async_present.queue_mutex);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-relock-queue-end");
+ 
+    if (result != VK_SUCCESS)
+       return result;
+ 
+-   return vn_ResetFences(dev_handle, 1, &queue->async_present.fence);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-reset-begin");
++   result = vn_ResetFences(dev_handle, 1, &queue->async_present.fence);
++   if (VN_DEBUG(WSI))
++      vn_log(dev->instance, "sync-trace wsi-fence-reset-end result=%d", result);
++   return result;
+ }
+ 
+ void

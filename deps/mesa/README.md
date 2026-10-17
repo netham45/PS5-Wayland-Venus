@@ -109,6 +109,11 @@ These proxies inject the common descriptor-compatibility archive into the
 shared-driver link as well as payload links. Mesa's FreeBSD anonymous-shm
 and descriptor-duplication paths rely on those wrappers; do not substitute
 the raw SDK compiler or add separate per-call-site flag workarounds.
+PS5 driver configuration fingerprints the cross/native files, compiler proxy,
+public-loader binding list and injected compatibility archive after bootstrapping it. A changed or absent
+signature wipes Meson's cached compiler identity before rebuilding RADV,
+Venus or lavapipe; ordinary `--reconfigure` alone cannot track libraries
+injected by a compiler proxy.
 
 `0002-wayland-without-videoout.patch` disables pacbrew's otherwise
 unconditional VideoOut WSI when Wayland is selected and removes its system
@@ -227,6 +232,14 @@ flush lock. On PS5 it also exports `ps5wl_venus_set_log_handler`; the diagnostic
 payload installs its existing ps5log sink before `vkCreateInstance`, so traces
 remain visible while the WSI thread is blocked instead of sitting only in the
 payload's captured stderr file. Normal payload builds do not bind the sink.
+`0009-wsi-postwait-trace.patch` separates the post-fence chain reacquisition,
+queue reacquisition and fence reset. `0010-wsi-cpu-stages.patch` installs an
+optional WSI stage sink for `VN_DEBUG=wsi`: common CPU-image fence wait,
+Wayland presentation-queue dispatch, shm memcpy, colorspace update, legacy
+FIFO dispatch and platform-present completion. Other ICDs leave the sink
+unset; Venus forwards it through the same host/PS5 logging path.
+`0011-wsi-dispatch-stages.patch` further separates present-ID lock/condition
+waits from the zero-timeout Wayland loader dispatch and subsequent relock.
 
 ```sh
 env/run deps/mesa/build.sh host --driver venus

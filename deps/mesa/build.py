@@ -79,11 +79,27 @@ def prepare(driver='radv'):
 
 def configure(name, src, options, env):
     binary = BASE / name
+    cross_signature = None
+    stamp = binary / '.ps5wl-toolchain'
+    if name == 'ps5' or name.startswith('ps5-'):
+        run([ROOT / 'cross/bootstrap-compat.sh'], env=env)
+        inputs = [ROOT / 'build/ps5/cross.ini', ROOT / 'build/ps5/native.ini',
+                  ROOT / 'cross/compiler.sh', ROOT / 'cross/public-loader.dyn',
+                  ROOT / 'build/ps5/runtime/libps5wl-fd-compat.a']
+        cross_signature = hashlib.sha256(b''.join(p.read_bytes() for p in inputs)).hexdigest()
     args = ['meson', 'setup', binary, src, '--libdir=lib', '--buildtype=release',
             '--wrap-mode=nofallback', '-Dauto_features=disabled']
     if (binary / 'meson-private/coredata.dat').exists():
-        args.append('--reconfigure')
+        # Compiler-proxy arguments and injected archives are invisible to Ninja.
+        # Match the compositor's clean compiler migration on signature changes.
+        if cross_signature is not None and (
+                not stamp.exists() or stamp.read_text() != cross_signature):
+            args.append('--wipe')
+        else:
+            args.append('--reconfigure')
     run(args + options, env=env)
+    if cross_signature is not None:
+        stamp.write_text(cross_signature)
     return binary
 
 

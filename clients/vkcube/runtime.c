@@ -165,6 +165,7 @@ static uint64_t fault_registers[REGISTER_COUNT];
 static int fault_pipe[2] = {-1, -1};
 static pthread_t fault_thread;
 static atomic_int fault_claimed;
+static atomic_int fault_ready;
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2, "signal-safe fault ownership");
 
 /* The SDK's process-read helper can use privileged debugging syscalls. Keep it
@@ -218,7 +219,7 @@ static void *fault_collect(void *unused) {
     ssize_t result;
     do { result = read(fault_pipe[0], &number, 1); } while (result < 0 && errno == EINTR);
     if (result != 1 || !number) return NULL;
-    atomic_thread_fence(memory_order_acquire);
+    if (!atomic_load_explicit(&fault_ready, memory_order_acquire)) return NULL;
     static const char *const names[REGISTER_COUNT] = {
         "rax=", "rbx=", "rcx=", "rdx=", "rsi=", "rdi=", "rbp=", "rsp=",
         "r8=", "r9=", "r10=", "r11=", "r12=", "r13=", "r14=", "r15=",
@@ -301,7 +302,7 @@ static void fatal_signal(int number, siginfo_t *info, void *context) {
             mc->mc_r12, mc->mc_r13, mc->mc_r14, mc->mc_r15, mc->mc_rip, mc->mc_rflags
         };
         for (size_t i = 0; i < REGISTER_COUNT; ++i) fault_registers[i] = registers[i];
-        atomic_thread_fence(memory_order_release);
+        atomic_store_explicit(&fault_ready, 1, memory_order_release);
         const unsigned char request = (unsigned char)number;
         if (write(fault_pipe[1], &request, 1) != 1) _exit(128 + number);
     }

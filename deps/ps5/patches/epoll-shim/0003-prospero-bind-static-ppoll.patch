@@ -1,4 +1,4 @@
-Rationale: Console dlsym has no ppoll export; the SDK supplies it in static libc, so bind that real implementation directly.
+Rationale: Console dlsym has no ppoll export; retain a static reference so the canonical --wrap=ppoll runtime repair also covers epoll-shim's internal binding.
 --- a/src/wrap.c
 +++ b/src/wrap.c
 @@ -62,7 +62,11 @@

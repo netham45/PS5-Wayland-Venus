@@ -143,11 +143,44 @@ fault address, trap 12, page-fault error 4 and native mcontext length 1152 in
 `build/ps5/evidence/gpu/l5-fault-client.log`. The opaque-prefix PS5 signal-frame
 adapter captured those fields successfully. The fault instruction is outside
 the loaded driver's static code region, inferred from its logged
-`vkGetInstanceProcAddr` address and that symbol's zero ELF offset. The faulting
-system module, caller and cause are not established; SDK import stubs do not
-contain firmware symbol offsets. PS5 LLVM and Mesa lavapipe builds retain frame
-pointers for the approved follow-on register, instruction and stack capture.
-No worker-stack, TLS or JIT-protection cause is inferred from this failure.
+`vkGetInstanceProcAddr` address and that symbol's zero ELF offset. SDK import
+stubs cannot attribute firmware offsets. PS5 LLVM and Mesa lavapipe builds
+therefore retain frame pointers for register, instruction and stack capture.
+The frame-pointer build completed through the public PS5 Mesa recipe, and
+disassembly confirms `push %rbp; mov %rsp,%rbp` prologues in both Mesa's
+`lvp_CreateDevice` and LLVM's `LLVMInitializeX86TargetInfo`.
+
+The authorized extended capture in
+`build/ps5/evidence/gpu/l5-extended-client.log` identified libc `strlen(NULL)`.
+Its complete symbolized frame chain and ELF-binding evidence are preserved in
+`l5-extended-symbolized.log` alongside the capture. MCJIT initialization calls
+`DynamicLibrary::getPermanentLibrary(NULL)`, whose `dlopen` fails and whose
+`dlerror` returns NULL; assigning that error to `std::string` reaches the
+captured null read. This happens synchronously while llvmpipe initializes its
+sampler matrix during device creation, not in a raster worker.
+
+The ICD's `-Bsymbolic` binding selected its own SDK static-libc `dlopen` wrapper,
+whose private weak `__dlopen` hook is not exported by the payload. The payload
+exports the public `dlopen`, `dlsym`, `dlclose` and `dlerror` entrypoints instead.
+The canonical `cross/compiler.sh` DSO link contract applies
+`cross/public-loader.dyn`, making public `dl*` calls interposable on PS5 while
+retaining symbolic binding for other ICD/LLVM definitions. It neither exports
+private CRT hooks nor suppresses LLVM's loader error. The original
+lavapipe-specific dynamic-list patch was removed when the shared compatibility
+shim also needed the same public loader contract. A pre-fix relocation audit
+finds none of the four public-loader relocations required by this path.
+The corrected host build, 120-present/120-commit Wayland smoke and PS5 driver
+build completed successfully. The post-fix audit finds all four
+`R_X86_64_GLOB_DAT` loader relocations, and MCJIT now calls the public loader GOT
+slots instead of its local SDK wrappers. Dynamic flags remain
+`SYMBOLIC BIND_NOW`; the driver still needs only the kernel and libc modules.
+PS5 configuration also fingerprints the cross/native machine files, compiler
+proxy, canonical dynamic list and injected compatibility archive after rebuilding
+that archive, so central shim changes cannot silently reuse an old ICD link.
+The final rebuild with the central `ppoll` correction completed successfully;
+its audit retains all four public-loader relocations and all three
+`vk_instance_init` calls to `mesa_mtx_init`. Disassembly also confirms Wayland's
+timeout helper calls the central `__wrap_ppoll`, not the SDK's incompatible stub.
 
 No 600-present or screenshot acceptance is claimed. Every additional console
 run requires explicit authorization and coordination with the console owner.

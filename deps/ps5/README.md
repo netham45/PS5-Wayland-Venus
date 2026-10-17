@@ -29,8 +29,8 @@ also puts them before the SDK tools. Direct Makefiles use that same compiler
 path, not independent copies of link flags. The proxy builds the standalone
 `build/ps5/runtime/libps5wl-fd-compat.a` under a lock and links it with wrappers
 for `fcntl`, `dup3`, `open`, `openat`, `shm_open`, `socket`, `socketpair`,
-`accept4`, `recvmsg`, `mkostemp` and `pipe2`. Each wrapper has its own archive
-member, so unused APIs do not become new firmware imports.
+`accept4`, `recvmsg`, `mkostemp`, `pipe2` and `ppoll`. Each wrapper has its own
+archive member, so unused APIs do not become new firmware imports.
 
 PS5's nominal `F_DUPFD_CLOEXEC` command is incompatible: console probes showed
 both failure on sockets and false success returning an unrelated fd zero for
@@ -44,6 +44,37 @@ close-on-exec/nonblocking state, cleaning up acquired descriptors on failure.
 `accept4` uses the real `accept`; no nonexistent firmware `accept4` import is
 introduced. The native regression is `cross/test-fd-compat.sh`; console probe
 regressions verify actual SHM identity and cross-process mapping coherence.
+
+Shared-library links also receive `cross/public-loader.dyn`, the canonical
+five-symbol exception (`dlopen`, `dlsym`, `dladdr`, `dlclose`, `dlerror`) to
+`-Bsymbolic`. These public loader calls must resolve through the payload's
+initialized loader, not a DSO-local SDK wrapper whose weak `__dl*` hooks are
+unbound. Keep the remainder of `-Bsymbolic` intact. Build-system link fingerprints
+must include the compiler proxy, compatibility archive and this list's contents;
+changing injected link inputs alone is not visible to an existing Ninja graph.
+
+`ppoll` is implemented in `shim/ppoll_compat.c`, not by the SDK's raw syscall
+stub. The unmasked path calls native `poll`, rounds nanoseconds up to milliseconds
+and chunks large finite timeouts without converting them to infinity. After the
+one-time loader lookup it does not allocate, copy fd arrays or start threads.
+Native `poll` is resolved using an explicit
+`/system/common/lib/libkernel_sys.sprx` loader handle:
+SDK `RTLD_NEXT` is unsupported, while `RTLD_DEFAULT` can select epoll-shim's
+interposed `poll` and recurse. The temporary handle is closed after lookup;
+the SDK releases lookup metadata without unloading this resident kernel module.
+No private payload-CRT kernel helper imports are required by ICD DSOs.
+
+For a non-null signal mask, native `pselect` performs the actual atomic
+thread-mask swap and restoration. Immediate readiness, zero timeout and an empty
+fd vector need no helper. A blocking masked fd wait uses a 64-KiB-stack helper
+running native `poll`, plus notification/cancellation pipes, so HUP/ERR-only
+subscriptions, invalid fds, duplicates and fds above `FD_SETSIZE` keep poll
+semantics. The helper inherits blocked signals and is joined before every return,
+including timeout, EINTR and pthread cancellation. No worker or TLS destructor
+survives an ICD unload. This exceptional path needs four temporary descriptors;
+vectors over 16 entries and high notification fds also need temporary heap space.
+There is no non-atomic `pthread_sigmask`/`poll` wait or process-wide signal-filter
+substitute. `cross/test-fd-compat.sh` runs real native fd and ppoll regressions.
 
 wlroots 0.20 always includes the pixman renderer, headless/Wayland backends,
 shared-memory allocator and DRM-dumb allocator. Its `renderers` option only lists
@@ -75,8 +106,8 @@ or compatibility copy is retained.
 - `epoll-shim/0002-ps5-static-pkgconfig.patch`: publish the actual upstream release
   version and omit nonexistent librt from the PS5 static-link metadata.
 - `epoll-shim/0003-prospero-bind-static-ppoll.patch`: console `dlsym` has no
-  `ppoll` export, although SDK static libc implements it. Bind that real
-  implementation directly instead of aborting during dynamic symbol lookup.
+  `ppoll` export. Keep the static symbol reference so the canonical link-time
+  `--wrap=ppoll` repair also covers epoll-shim's internal `real_ppoll` binding.
 - `epoll-shim/0004-prospero-link-fcntl-compatibility.patch`: bind `fcntl` through
   the link-time wrapper instead of bypassing it through `dlsym`.
 - `wayland/0001-freebsd-local-socket-level.patch`: use protocol level zero for
@@ -175,6 +206,37 @@ bidirectional coherence checks. Exact-target `F_DUP2FD_CLOEXEC` and `dup3`
 also retained identity, size and close-on-exec state and passed coherence.
 Socket/socketpair close-on-exec and nonblocking flags, open/shm_open
 close-on-exec, and received SCM_RIGHTS close-on-exec were observed set.
+
+### ppoll correction and evidence boundary
+
+The earlier epoll/timer/signalfd successes did **not** establish raw SDK ppoll
+timeout behavior: epoll-shim can return from its own zero-timeout/readiness path
+without calling it. GPU-owner console evidence subsequently recorded one empty
+pipe, `nfds=1`, `{0,0}`, null mask returning the impossible readiness count `3`
+with `revents=0` (`build/ps5/evidence/gpu/ppoll-raw-client.log`, payload 126).
+[INFERENCE] This can keep Wayland's timeout-dispatch loop alive by treating the
+invalid positive count as readiness.
+
+The native primitive probes establish zero/finite/ready `pselect` behavior and
+thread-directed pending SIGUSR1 producing `-1/EINTR`, one handler invocation and
+restoration of the original blocked mask
+(`pselect-thread-client.log`, payload 129). An explicit kernel-module handle
+resolved native `poll` rather than a real payload-root poll interposer, and
+returned empty `0` / ready `1`
+(`native-module-poll-client.log`, payload 132). These logs are under
+`build/ps5/evidence/gpu/` and were produced by the console owner.
+
+The dependency owner ran `cross/test-fd-compat.sh` successfully after the repair:
+zero/finite/infinite waits, readiness, timeout validation, invalid/negative fds,
+HUP/ERR-only subscriptions, duplicate and maximum-sized vectors, caller and
+notification fds above 1024, pending and in-flight thread-directed signals with
+`SA_RESTART`, unrelated-thread signals, mask restoration and cancellation cleanup.
+The target archive compiled successfully, and a small PS5 `-shared -Bsymbolic
+--no-undefined` link succeeded with public `dlopen`/`dlsym`/`dlclose` and `pselect`
+GOT relocations. `llvm-readelf` emitted the SDK binary's PT_DYNAMIC-size warnings;
+the relocation inspection still exited zero. These are host-semantic/link
+results and primitive console evidence, **not** a completed repaired ICD/WSI
+console acceptance run.
 
 ### Console-stop evidence
 

@@ -1,0 +1,7 @@
+{
+    dlopen;
+    dlsym;
+    dladdr;
+    dlclose;
+    dlerror;
+};

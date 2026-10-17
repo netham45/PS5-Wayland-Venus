@@ -1,0 +1,124 @@
+From: ps5wl contributors
+Subject: [PATCH] wsi: forward diagnostic CPU presentation stages to Venus
+
+--- a/src/vulkan/wsi/wsi_common.h
++++ b/src/vulkan/wsi/wsi_common.h
+@@ -55,6 +55,8 @@
+ #define VK_ICD_WSI_PLATFORM_MAX (VK_ICD_WSI_PLATFORM_METAL + 1)
+ 
+ struct wsi_device {
++   /* Optional stage sink, installed before presentation worker startup. */
++   void (*trace_stage)(const char *stage);
+    /* Allocator for the instance */
+    VkAllocationCallbacks instance_alloc;
+ 
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -119,6 +119,12 @@
+    }
+ }
+ 
++static void
++vn_wsi_trace_stage(const char *stage)
++{
++   vn_log(NULL, "sync-trace %s", stage);
++}
++
+ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+ vn_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char *pName)
+ {
+@@ -186,6 +192,8 @@
+    if (result != VK_SUCCESS)
+       return result;
+ 
++   if (VN_DEBUG(WSI))
++      physical_dev->wsi_device.trace_stage = vn_wsi_trace_stage;
+    physical_dev->wsi_device.supports_scanout = false;
+    physical_dev->wsi_device.supports_modifiers =
+       physical_dev->base.vk.supported_extensions.EXT_image_drm_format_modifier;
+--- a/src/vulkan/wsi/wsi_common_private.h
++++ b/src/vulkan/wsi/wsi_common_private.h
+@@ -43,6 +43,13 @@
+ #define WSI_DEBUG_NOWLTS      (1ull << 5)
+ 
+ extern uint64_t WSI_DEBUG;
++
++static inline void
++wsi_trace_stage(const struct wsi_device *wsi, const char *stage)
++{
++   if (wsi->trace_stage)
++      wsi->trace_stage(stage);
++}
+ 
+ enum wsi_image_type {
+    WSI_IMAGE_TYPE_CPU,
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -2895,8 +2895,10 @@
+        * even when a hardware device produced it.
+        */
+       if (wsi->sw || image->cpu_map != NULL) {
++         wsi_trace_stage(wsi, "wsi-cpu-fence-wait-begin");
+          results[i] = wsi->WaitForFences(vk_device_to_handle(dev),
+                                         1, &swapchain->fences[image_index], true, ~0ull);
++         wsi_trace_stage(wsi, "wsi-cpu-fence-wait-end");
+          if (results[i] != VK_SUCCESS)
+             continue;
+       }
+@@ -2905,9 +2907,11 @@
+       if (regions && regions->pRegions)
+          region = &regions->pRegions[i];
+ 
++      wsi_trace_stage(wsi, "wsi-platform-present-begin");
+       results[i] = swapchain->queue_present(swapchain, image_index,
+                                             image_signal_infos[i].present_id,
+                                             region);
++      wsi_trace_stage(wsi, "wsi-platform-present-end");
+       if (results[i] != VK_SUCCESS && results[i] != VK_SUBOPTIMAL_KHR)
+          continue;
+ 
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -3263,8 +3263,10 @@
+     * queue their events are in is dispatched.
+     */
+    struct timespec instant = {0};
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-present-dispatch-begin");
+    if (dispatch_present_id_queue(wsi_chain, &instant) == VK_ERROR_OUT_OF_DATE_KHR)
+       return VK_ERROR_OUT_OF_DATE_KHR;
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-present-dispatch-end");
+ 
+    /* While the specification suggests we can keep presenting already acquired
+     * images on a retired swapchain, there is no requirement to support that.
+@@ -3284,16 +3286,21 @@
+ 
+    if (chain->buffer_type == WSI_WL_BUFFER_SHM_MEMCPY) {
+       struct wsi_wl_image *image = &chain->images[image_index];
++      wsi_trace_stage(wsi_chain->wsi, "wsi-wl-copy-begin");
+       memcpy(image->shm_ptr, image->base.cpu_map,
+              image->base.row_pitches[0] * chain->extent.height);
+-   }
+-
++      wsi_trace_stage(wsi_chain->wsi, "wsi-wl-copy-end");
++   }
++
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-colorspace-begin");
+    VkResult ret = wsi_wl_swapchain_update_colorspace(chain);
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-colorspace-end");
+    if (ret != VK_SUCCESS)
+       return ret;
+ 
+    /* For KHR_swapchain_maintenance1. We might have transitioned from FIFO to MAILBOX.
+     * In this case we need to let the FIFO request complete, before presenting MAILBOX. */
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-fifo-dispatch-begin");
+    while (!chain->legacy_fifo_ready) {
+       int ret = wl_display_dispatch_queue(wsi_wl_surface->display->wl_display,
+                                           wsi_wl_surface->display->queue);
+@@ -3303,6 +3310,7 @@
+       queue_dispatched = true;
+    }
+ 
++   wsi_trace_stage(wsi_chain->wsi, "wsi-wl-fifo-dispatch-end");
+    if (chain->base.image_info.explicit_sync) {
+       struct wsi_wl_image *image = &chain->images[image_index];
+       /* Incremented by signal in base queue_present. */

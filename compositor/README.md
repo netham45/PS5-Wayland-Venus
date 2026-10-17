@@ -65,8 +65,8 @@ dependency linking, producing
 command, not by falling back to host packages. PS5 selects the custom VideoOut
 backend automatically, logs on TCP 9530, and listens on `/system_tmp/wayland-0`.
 The PS5 compiler is the repository compatibility proxy. Changes to the cross
-configuration, proxy or injected runtime archive wipe Meson's cached compiler
-identity before rebuilding; incremental reconfigure cannot retain an old SDK
+configuration, proxy, public-loader binding list or injected runtime archive
+wipe Meson's cached compiler identity before rebuilding; incremental reconfigure cannot retain an old SDK
 compiler that bypasses the PS5 descriptor compatibility layer.
 The pinned evdev/pc105/us XKB keymap is compiled on the build host and embedded;
 no console XKB files or shell are required. New PS5 windows are maximized to
@@ -98,6 +98,9 @@ Do not use `ps5ctl run` directly for the compositor.
 TCP 9531 returns a raw PNG of the completed, de-tiled scanout on connection;
 use `tools/ps5ctl screenshot --port 9531 --output capture.png` to pull it.
 System UI overlays are not included in this readback.
+Surface-commit counters include the xdg app ID and title, so simultaneously
+running demo and Vulkan windows can be distinguished when comparing client
+present counts with compositor commits.
 
 
 The home-screen launcher bundle installs the separate interactive demo at
